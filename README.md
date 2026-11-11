@@ -2,6 +2,10 @@
 
 [English](#english) · [Русский](#русский)
 
+**[Website](https://idlorem.github.io/kino/) · [Сайт](https://idlorem.github.io/kino/ru.html)**
+
+[![Kino](docs/images/kino-library.jpg)](https://idlorem.github.io/kino/)
+
 ## English
 
 A catalog for your local movies and series on Windows, with an Android TV and phone client that streams from the PC.
