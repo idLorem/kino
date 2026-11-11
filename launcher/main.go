@@ -240,8 +240,17 @@ func main() {
 		}
 	}
 
-	sp := startSplash()
-	ch, ok := start()
+	var sp *splash
+	var extra []string
+	for _, a := range os.Args[1:] {
+		if a == "--minimized" || a == "--after-update" {
+			extra = append(extra, a)
+		}
+	}
+	if len(extra) == 0 || extra[0] != "--minimized" {
+		sp = startSplash()
+	}
+	ch, ok := start(extra...)
 	if !ok {
 		sp.close()
 		return

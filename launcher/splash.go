@@ -97,6 +97,9 @@ func startSplash() *splash {
 }
 
 func (s *splash) close() {
+	if s == nil {
+		return
+	}
 	select {
 	case s.stop <- struct{}{}:
 	default:

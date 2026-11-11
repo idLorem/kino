@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -79,13 +79,14 @@ DEFAULT_CONFIG = {
     "omdb_api_key": "",
     "lb_user": "",
     "fallback_source": "none",
-    "web_fallback": "1",
     "bg_mode": "default",
     "bg_color": "#0a0a0a",
     "bg_dim": "55",
     "bg_blur": "0",
     "bg_ver": "0",
     "auto_update": "1",
+    "tray_close": "1",
+    "autostart": "0",
     "card_rating": "imdb",
     "sort": "added",
     "shortcut_done": "",
@@ -1102,10 +1103,21 @@ class Api:
             return False
         with self._lock:
             keys = list(self._cfg["srv_tokens"])
-        ok = False
+        hit = None
         for k in keys:
-            ok = hmac.compare_digest(str(t), k) or ok
-        return ok
+            if hmac.compare_digest(str(t), k):
+                hit = k
+        if hit is None:
+            return False
+        now = int(time.time())
+        with self._lock:
+            v = self._cfg["srv_tokens"].get(hit)
+            fresh = isinstance(v, dict) and now - int(v.get("last") or 0) >= 60
+            if fresh:
+                v["last"] = now
+        if fresh:
+            self._save_cfg()
+        return True
 
     def _tv_add_token(self, name):
         tok = secrets.token_urlsafe(24)
@@ -1160,7 +1172,8 @@ class Api:
     @safe
     def srv_info(self):
         with self._lock:
-            devs = [v.get("name") or "TV" for v in self._cfg["srv_tokens"].values()]
+            devs = [{"name": v.get("name") or "TV", "ts": v.get("ts") or 0, "last": v.get("last") or 0}
+                    for v in self._cfg["srv_tokens"].values() if isinstance(v, dict)]
         port = self._srv_port()
         return {"ok": True, "on": self._cfg.get("srv_on") == "1", "running": bool(self._srv), "error": self._srv_err,
                 "port": port, "addr": "http://%s:%d" % (_local_ip(), port), "pin": self._srv_pin(),
@@ -1290,37 +1303,92 @@ class Api:
             port = 8765
         return host, port
 
+    @staticmethod
+    def _local_ips():
+        ips = {_local_ip()}
+        try:
+            ips.update(r[4][0] for r in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+        except OSError:
+            pass
+        return sorted(i for i in ips if not i.startswith(("127.", "169.254.", "0.")))
+
+    @staticmethod
+    def _probe_kino(host):
+        try:
+            with socket.create_connection((host, 8765), timeout=0.35) as c:
+                c.settimeout(0.8)
+                c.sendall(b"GET /api/ping HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                buf = b""
+                while b"\r\n\r\n" not in buf and len(buf) < 4096:
+                    chunk = c.recv(1024)
+                    if not chunk:
+                        break
+                    buf += chunk
+                head, _, body = buf.partition(b"\r\n\r\n")
+                m = re.search(rb"(?i)content-length:\s*(\d+)", head)
+                n = min(int(m.group(1)), 4096) if m else 0
+                while len(body) < n:
+                    chunk = c.recv(1024)
+                    if not chunk:
+                        break
+                    body += chunk
+            d = json.loads(body.decode("utf-8"))
+        except (OSError, ValueError):
+            return None
+        return (host, 8765, d.get("name") or host) if d.get("app") == "kino" else None
+
     @safe
     def remote_discover(self):
+        import select
         found = {}
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            s.settimeout(0.4)
-            for _ in range(2):
+        ips = self._local_ips()
+        mine = set(ips) | {"127.0.0.1"}
+        sweep = [("%s.%d" % (ip.rsplit(".", 1)[0], n)) for ip in ips[:4] for n in range(1, 255)]
+        sweep = [h for h in dict.fromkeys(sweep) if h not in mine]
+        pool = ThreadPoolExecutor(max_workers=64)
+        futs = [pool.submit(self._probe_kino, h) for h in sweep]
+        socks = []
+        for ip in ips + [""]:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.bind((ip, 0))
+                socks.append((s, ip))
+            except OSError:
+                pass
+        for _ in range(2):
+            for s, ip in socks:
+                for dst in ("255.255.255.255", ip.rsplit(".", 1)[0] + ".255" if ip else None):
+                    if dst:
+                        try:
+                            s.sendto(b"KINO?", (dst, TV_UDP_PORT))
+                        except OSError:
+                            pass
+            end = time.time() + 0.9
+            while time.time() < end and socks:
                 try:
-                    s.sendto(b"KINO?", ("255.255.255.255", TV_UDP_PORT))
-                except OSError:
-                    pass
-                end = time.time() + 0.9
-                while time.time() < end:
+                    ready = select.select([s for s, _ in socks], [], [], 0.2)[0]
+                except (OSError, ValueError):
+                    break
+                for s in ready:
                     try:
                         data, addr = s.recvfrom(512)
-                    except socket.timeout:
-                        continue
-                    except OSError:
-                        break
-                    try:
                         d = json.loads(data.decode("utf-8"))
-                    except ValueError:
+                    except (OSError, ValueError):
                         continue
                     if d.get("app") == "kino":
                         found[(addr[0], int(d.get("port") or 8765))] = d.get("name") or addr[0]
+        for s, _ in socks:
             s.close()
-        except OSError:
-            pass
-        mine = _local_ip()
-        out = [{"host": h, "port": p, "name": n, "self": h in (mine, "127.0.0.1")} for (h, p), n in found.items()]
+        for f in futs:
+            try:
+                r = f.result(timeout=3)
+            except Exception:
+                r = None
+            if r:
+                found.setdefault((r[0], r[1]), r[2])
+        pool.shutdown(wait=False, cancel_futures=True)
+        out = [{"host": h, "port": p, "name": n, "self": h in mine} for (h, p), n in found.items()]
         return {"ok": True, "servers": out}
 
     @safe
@@ -1404,7 +1472,7 @@ class Api:
         return {"ok": True, "roots": [], "missing": [], "items": items, "ghosts": ghosts,
                 "remote": self._remote["name"]}
 
-    def _remote_play(self, path):
+    def _remote_play(self, path, override=""):
         m = re.fullmatch(r"kino-remote://([^/]+)/(\d+)", path)
         r = self._rem()
         if not m or not r:
@@ -1412,7 +1480,14 @@ class Api:
         url = "http://%s:%d/api/stream/%s/%s?t=%s" % (r["host"], r["port"], m.group(1), m.group(2), r["token"])
         mode = self._cfg.get("player_mode")
         player = self._cfg.get("player_path")
-        if not (mode == "custom" and player and os.path.isfile(player)):
+        if override:
+            if override == "browser":
+                player = None
+            elif os.path.isfile(override) and override.lower().endswith(".exe"):
+                player = override
+            else:
+                return {"ok": False, "error": "Файл плеера не найден"}
+        elif not (mode == "custom" and player and os.path.isfile(player)):
             player = None
             choice = self._cfg.get("remote_player") or ""
             if choice == "browser":
@@ -1420,7 +1495,7 @@ class Api:
             elif choice and os.path.isfile(choice):
                 player = choice
             else:
-                return {"ok": False, "needPlayer": True, "vlc": self._find_vlc()}
+                return {"ok": False, "needPlayer": True, "players": self._find_players()}
         try:
             if player:
                 flags = (0x00000008 | 0x00000200) if os.name == "nt" else 0
@@ -1434,15 +1509,31 @@ class Api:
             return {"ok": False, "error": "Не удалось запустить: %s" % e}
         return {"ok": True}
 
-    @staticmethod
-    def _find_vlc():
+    def _find_players(self):
         if os.name != "nt":
-            return None
-        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
-            c = os.path.join(base or "", "VideoLAN", "VLC", "vlc.exe")
-            if base and os.path.isfile(c):
-                return c
-        return None
+            return []
+        bases = [os.environ.get(k) for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")]
+        bases.append(os.path.join(os.environ.get("LOCALAPPDATA") or "", "Programs"))
+        known = (("VLC", r"VideoLAN\VLC\vlc.exe"), ("PotPlayer", r"DAUM\PotPlayer\PotPlayerMini64.exe"),
+                 ("PotPlayer", r"PotPlayer\PotPlayerMini64.exe"), ("PotPlayer", r"PotPlayer64\PotPlayerMini64.exe"),
+                 ("MPC-HC", r"MPC-HC\mpc-hc64.exe"), ("MPC-BE", r"MPC-BE x64\mpc-be64.exe"),
+                 ("MPC-BE", r"MPC-BE\mpc-be64.exe"), ("mpv", r"mpv\mpv.exe"), ("SMPlayer", r"SMPlayer\smplayer.exe"),
+                 ("KMPlayer", r"The KMPlayer\KMPlayer64.exe"))
+        found, seen = [], set()
+
+        def add(name, path):
+            key = os.path.normcase(os.path.normpath(path))
+            if key not in seen and os.path.isfile(path):
+                seen.add(key)
+                found.append({"name": name, "path": os.path.normpath(path)})
+        for name, rel in known:
+            for b in bases:
+                if b:
+                    add(name, os.path.join(b, rel))
+        mine = self._cfg.get("player_path")
+        if mine:
+            add(os.path.splitext(os.path.basename(mine))[0], mine)
+        return found
 
     @safe
     def remote_set_player(self, kind, path=""):
@@ -2165,10 +2256,7 @@ class Api:
         ru = self._lang() == "ru"
         kp_cfg = bool(cfg["kp_api_key"]) and ru
         tm_ok = ru and cfg["fallback_source"] == "tmdb" and bool(cfg["tmdb_api_key"])
-        web_ok = cfg.get("web_fallback", "1") == "1"
         om_ok = self._omdb_ready()
-        if not (kp_cfg or tm_ok or web_ok or om_ok):
-            return "nokey", None, {}
         parts = [p for p in split_mixed(it["title"]) if len(p) > 1]
         if parts:
             it = dict(it, alts=parts + [a for a in (it.get("alts") or []) if a not in parts])
@@ -2211,8 +2299,8 @@ class Api:
                     errs.add("net")
                 elif e.code in ("auth", "limit", "rate"):
                     self._block_kp(e.code)
-        if meta is None and (web_ok or om_ok):
-            steps = ([self._step_omdb] if om_ok else []) + ([self._step_imdb] if web_ok else [])
+        if meta is None:
+            steps = ([self._step_omdb] if om_ok else []) + [self._step_imdb]
             for step in steps:
                 try:
                     meta = step(queries, it)
@@ -2292,8 +2380,8 @@ class Api:
     @safe
     def save_settings(self, data):
         allowed = {"player_mode", "player_path", "kp_api_key", "tmdb_api_key", "omdb_api_key", "lb_user", "fallback_source", "poster_size",
-                   "bg_mode", "bg_color", "bg_dim", "bg_blur", "auto_update", "lang", "lang_set", "card_rating", "sort"}
-        flags = {"web_fallback", "tray_close"}
+                   "bg_mode", "bg_color", "bg_dim", "bg_blur", "auto_update", "lang", "lang_set", "card_rating", "sort", "autostart"}
+        flags = {"tray_close"}
         prev_key = self._cfg["kp_api_key"]
         if isinstance((data or {}).get("root_folders"), list):
             self._cfg["root_folders"] = self._norm_roots(data["root_folders"])
@@ -2313,6 +2401,8 @@ class Api:
         self._cfg["lang_set"] = "1" if str(self._cfg.get("lang_set")) == "1" else ""
         if self._cfg.get("card_rating") not in ("kp", "imdb", "lb"):
             self._cfg["card_rating"] = "imdb"
+        if self._cfg.get("autostart") not in ("0", "min", "normal"):
+            self._cfg["autostart"] = "0"
         if self._cfg.get("sort") not in ("added", "rating", "yearDesc", "yearAsc", "title"):
             self._cfg["sort"] = "added"
         if self._cfg.get("bg_mode") not in ("default", "color", "image"):
@@ -2331,7 +2421,38 @@ class Api:
         if prev_key != self._cfg["kp_api_key"]:
             self._kp_dead = (None, 0)
         self._save_cfg()
+        self._autostart_apply()
         return {"ok": True, "settings": self.get_settings()}
+
+    def _autostart_apply(self):
+        if os.name != "nt":
+            return
+        mode = self._cfg.get("autostart")
+        try:
+            import winreg
+            exe = os.environ.get("KINO_EXE")
+            if exe and os.path.isfile(exe):
+                cmd = '"%s"' % exe
+            elif getattr(sys, "frozen", False):
+                cmd = '"%s"' % sys.executable
+            else:
+                pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+                cmd = '"%s" "%s"' % (pyw if os.path.isfile(pyw) else sys.executable, os.path.abspath(__file__))
+            if mode == "min":
+                cmd += " --minimized"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0,
+                                winreg.KEY_READ | winreg.KEY_SET_VALUE) as k:
+                try:
+                    cur = winreg.QueryValueEx(k, "Kino")[0]
+                except OSError:
+                    cur = None
+                if mode in ("min", "normal"):
+                    if cur != cmd:
+                        winreg.SetValueEx(k, "Kino", 0, winreg.REG_SZ, cmd)
+                elif cur is not None:
+                    winreg.DeleteValue(k, "Kino")
+        except Exception as e:
+            _log("autostart: %s" % e)
 
     @safe
     def clip_get(self):
@@ -2711,7 +2832,7 @@ class Api:
                 found += run(self._omdb_search, q, year)
                 if year:
                     found += run(self._omdb_search, q)
-            if cfg.get("web_fallback", "1") == "1" and re.search(r"[A-Za-z]", q):
+            if re.search(r"[A-Za-z]", q):
                 found += run(self._imdb_search, q)
             seen, results = set(), []
             for c in found:
@@ -3970,9 +4091,9 @@ class Api:
         return {"ok": True, "kept": len(keep)}
 
     @safe
-    def play(self, path):
+    def play(self, path, override=""):
         if self._rem() and path.startswith("kino-remote://"):
-            return self._remote_play(path)
+            return self._remote_play(path, override)
         if path not in self._paths:
             return {"ok": False, "error": "Файл не входит в каталог. Обновите список."}
         if not os.path.isfile(path):
@@ -4218,6 +4339,15 @@ select.inp option{background:#141414;color:#f2f2f2}
 .radio input{accent-color:#f2f2f2;width:16px;height:16px}
 .hint{font-size:12px;color:var(--muted);line-height:1.5}
 .modal h2.t{margin:0 0 6px;font-size:24px;font-weight:800}
+.rp-list{display:grid;gap:8px;margin:20px 0 18px}
+.rp-i{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-height:48px;padding:0 16px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:var(--text);font-family:inherit;font-size:14px;text-align:left;cursor:pointer;transition:background-color .16s cubic-bezier(.22,1,.36,1),border-color .16s cubic-bezier(.22,1,.36,1)}
+.rp-i b{font-weight:600;white-space:nowrap}
+.rp-i span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--muted)}
+.rp-i:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.18)}
+.rp-i.pri{background:#ededed;border-color:#ededed;color:#0a0a0a}
+.rp-i.pri span{color:rgba(10,10,10,.55)}
+.rp-i.pri:hover{background:#fff}
+.rp-i:focus-visible{outline:2px solid rgba(255,255,255,.7);outline-offset:2px}
 .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:26px}
 .sep{height:1px;background:rgba(255,255,255,.08);margin:22px 0 0}
 
@@ -4312,6 +4442,7 @@ body:not(.v-wl) .wlonly{display:none}
 .st-g>.sec-t,.st-r .sec-t{margin:0 0 12px}
 .st-r{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:12px}
 .st-r .sec-t{margin:0}
+.st-modal .sec-t{font-size:13.5px;font-weight:500;color:var(--text)}
 .st-g>.hint:last-child,.st-g>.st-r:last-child{margin-bottom:0}
 .st-body select.inp{min-width:220px}
 .st-body .hint{font-size:13px;line-height:1.55}
@@ -4519,7 +4650,7 @@ const effType=it=>(it.meta&&it.meta.type)||it.kind;
 function pickRating(m){
   if(!m)return null;
   const o={kp:["ratingKp",1,""],imdb:["ratingImdb",1,""],tmdb:["ratingTmdb",1,""],lb:["ratingLb",2,"★"]};
-  const order=["imdb",S.settings.card_rating||"imdb","kp","tmdb","lb"];
+  const order=[S.settings.card_rating||"imdb","imdb","kp","tmdb","lb"];
   for(const k of order){ const f=o[k], v=m[f[0]]; if(v!=null)return{v:v*f[1],t:fmtR(v)+f[2]}; }
   return null;
 }
@@ -5006,25 +5137,33 @@ async function remoteOff(){
 }
 function updRemoteBtn(){ const b=$("#btnRemote"); if(b){ b.classList.toggle("primary",!!S.remote); b.title=S.remote?("Удалённая медиатека: "+(S.remote===true?"":S.remote)):"Медиатека на другом компьютере"; } }
 
-function playerAsk(path,vlc){
+function playerAsk(path,players){
+  const pl=players||[]; RM.askPath=path; RM.askPl=pl;
   $("#dlgRoot").innerHTML=`<div class="overlay dlg" data-act="dlg-overlay"><div class="modal sm glass">
     <button class="btn icon x" data-act="dlg-close">${svg("close")}</button>
     <h2 class="t">Чем открывать фильмы по сети?</h2>
-    <div class="hint">Выбор запомнится. Изменить его можно в окне «Медиатека на другом компьютере».</div>
-    ${vlc?`<div class="row"><button class="btn primary" data-act="rp-vlc">Использовать VLC</button><span class="hint">${esc(vlc)}</span></div>`:`<div class="hint">VLC не найден. Для MKV лучше всего подходит VLC или MPC-HC.</div>`}
-    <div class="row"><button class="btn${vlc?"":" primary"}" data-act="rp-exe">Выбрать .exe плеера…</button></div>
-    <div class="row"><button class="btn" data-act="rp-browser">Открывать в браузере</button><span class="hint">MKV и многие звуковые дорожки в браузере не работают</span></div>
+    <div class="rp-list">
+      ${pl.map((x,i)=>`<button class="rp-i${i?"":" pri"}" data-act="rp-use" data-i="${i}"><b>${esc(x.name)}</b><span>${esc(x.path)}</span></button>`).join("")}
+      <button class="rp-i${pl.length?"":" pri"}" data-act="rp-exe"><b>Выбрать .exe плеера…</b></button>
+      <button class="rp-i" data-act="rp-browser"><b>Открывать в браузере</b></button>
+    </div>
+    <label class="radio sw"><input type="checkbox" id="rp-mem" checked> Запомнить выбор</label>
   </div></div>`;
-  RM.askPath=path; RM.askVlc=vlc;
+}
+async function rpChoose(kind,p){
+  const mem=$("#rp-mem"), keep=!mem||mem.checked;
+  if(keep&&!await playerSet(kind,p))return;
+  closeDlg();
+  if(RM.askPath)play(RM.askPath,keep?"":(kind==="browser"?"browser":p)); else openRemote();
 }
 async function playerSet(kind,p){
   let r=null; try{ r=await api("remote_set_player",kind,p||""); }catch(e){}
   if(!r||!r.ok){ toast((r&&r.error)||"Не удалось сохранить","err"); return false; }
   if(RM.st)RM.st.player=r.player; return true;
 }
-async function play(path){
-  let r; try{ r=await api("play",path); }catch(e){ r={ok:false,error:"Нет связи с приложением"}; }
-  if(r&&r.needPlayer){ playerAsk(path,r.vlc); return; }
+async function play(path,override){
+  let r; try{ r=await api("play",path,override||""); }catch(e){ r={ok:false,error:"Нет связи с приложением"}; }
+  if(r&&r.needPlayer){ playerAsk(path,r.players); return; }
   if(!r||!r.ok){ toast((r&&r.error)||"Не удалось запустить","err"); return; }
   S.items.forEach(it=>{ it.files.forEach(f=>{if(f.path===path)f.watched=true;}); it.seasons.forEach(s=>s.episodes.forEach(e=>{if(e.path===path)e.watched=true;})); });
   toast("Запускаю плеер…"); if(S.current&&!S.fix.open)renderModal();
@@ -5114,14 +5253,21 @@ function tvHTML(){
     <div id="tvBox"></div>`;
 }
 async function tvLoad(){ let r=null; try{ r=await api("srv_info"); }catch(e){} if(r&&r.ok)renderTv(r); }
+function devWhen(d){
+  const en=S.lang==="en", loc=en?"en-GB":"ru-RU", fmt=s=>new Date(s*1000).toLocaleString(loc,{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  if(!d.last)return (en?"Paired ":"Подключено ")+fmt(d.ts||0);
+  if(Date.now()/1000-d.last<120)return en?"Online":"В сети";
+  return (en?"Last seen ":"Был в сети ")+fmt(d.last);
+}
 function renderTv(r){
   const box=$("#tvBox"); if(!box)return; const c=$("#tv-on"); if(c)c.checked=!!r.on;
   if(!r.on){ box.innerHTML=`<div class="hint">Телевизор и компьютер должны быть в одной сети. Приложение Kino для ТВ найдёт компьютер само.</div>`; return; }
   box.innerHTML=(r.error?`<div class="hint" style="color:#f2a2a2">${esc(r.error)}</div>`:"")+
-    `<div class="row"><span class="hint">Адрес</span><b style="user-select:text">${esc(r.addr)}</b></div>
+    `<div class="row"><span class="hint">Адрес</span><b style="user-select:text">${esc(r.addr)}</b><button class="btn icon" style="width:28px;height:28px;border-radius:8px" data-act="copy-text" data-v="${esc(r.addr)}" title="Копировать">${svg("copy",14)}</button></div>
     <label class="radio sw"><input type="checkbox" id="tv-pinreq" ${r.pinRequired?"checked":""}> Запрашивать PIN при подключении</label>
-    ${r.pinRequired?`<div class="row"><span class="hint">PIN</span><b style="font-size:22px;letter-spacing:.2em;user-select:text">${esc(r.pin)}</b><button class="btn sm" data-act="tv-pin">Новый PIN</button></div>`:`<div class="hint">Любое устройство в вашей сети сможет подключиться без PIN.</div>`}
+    ${r.pinRequired?`<div class="row"><span class="hint">PIN</span><b style="font-size:22px;letter-spacing:.2em;user-select:text">${esc(r.pin)}</b><button class="btn icon" style="width:28px;height:28px;border-radius:8px" data-act="copy-text" data-v="${esc(r.pin)}" title="Копировать">${svg("copy",14)}</button><button class="btn sm" data-act="tv-pin">Новый PIN</button></div>`:`<div class="hint">Любое устройство в вашей сети сможет подключиться без PIN.</div>`}
     <div class="row"><span class="hint">Подключено устройств: ${r.devices.length}</span><button class="btn sm" data-act="tv-forget" ${r.devices.length?"":"disabled"}>Отключить все</button></div>
+    ${r.devices.length?`<div style="display:grid;gap:8px;margin:6px 0 12px">${r.devices.map(d=>`<div class="row" style="justify-content:space-between"><b>${esc(d.name)}</b><span class="hint">${esc(devWhen(d))}</span></div>`).join("")}</div>`:""}
     <div class="hint">Если ТВ не подключается, разрешите Kino в брандмауэре Windows для частной сети.</div>`;
 }
 document.addEventListener("change",async e=>{
@@ -5131,16 +5277,20 @@ document.addEventListener("change",async e=>{
   if(r&&r.ok)renderTv(r); else { toast((r&&r.error)||"Не удалось изменить","err"); tvLoad(); }
 });
 async function tvAct(name){ let r=null; try{ r=await api(name); }catch(e){} if(r&&r.ok)renderTv(r); }
+function startHTML(){
+  const m=S.settings.autostart||"0";
+  return `<div class="st-r"><div class="sec-t">Запуск с системой</div><select id="s-auto" class="inp">${[["0","Выключено"],["min","Свернуто в трей"],["normal","Развернуто"]].map(o=>`<option value="${o[0]}" ${m===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
+    <label class="radio sw"><input type="checkbox" id="tray-close" ${S.settings.tray_close==="1"?"checked":""}> При закрытии сворачивать в трей</label>`;
+}
 function updHTML(){
   const on=(S.settings.auto_update||"1")!=="0";
   return `<div class="sec-t">Обновления</div>
     <label class="radio sw"><input type="checkbox" id="upd-auto" ${on?"checked":""}> Проверять обновления при запуске</label>
-    <label class="radio sw"><input type="checkbox" id="tray-close" ${S.settings.tray_close==="1"?"checked":""}> При закрытии сворачивать в трей</label>
     <div class="row"><button class="btn" data-act="upd-check">Проверить сейчас</button><span class="hint" id="upd-hint">Версия ${esc(S.settings.app_version||"")}</span></div>`;
 }
 document.addEventListener("change",e=>{ const t=e.target; if(t&&t.id==="upd-auto")saveBg({auto_update:t.checked?"1":"0"}); if(t&&t.id==="tray-close")saveBg({tray_close:t.checked?"1":"0"}); });
 
-const EN_DICT={"Чем открывать фильмы по сети?":"How to open movies over the network?","Выбор запомнится. Изменить его можно в окне «Медиатека на другом компьютере».":"The choice is remembered. You can change it in the “Library on another computer” window.","Использовать VLC":"Use VLC","VLC не найден. Для MKV лучше всего подходит VLC или MPC-HC.":"VLC not found. VLC or MPC-HC work best for MKV.","Выбрать .exe плеера…":"Choose player .exe…","Открывать в браузере":"Open in the browser","MKV и многие звуковые дорожки в браузере не работают":"MKV and many audio tracks don't work in the browser","Не удалось сохранить":"Could not save","Плеер для сети:":"Network player:","из настроек":"from settings","браузер":"browser","спросить при запуске":"ask on play","Сменить":"Change","Укажите .exe файл плеера":"Choose the player .exe file","При закрытии сворачивать в трей":"Minimize to tray on close","Открыть Kino":"Open Kino","через поиск по Кинопоиску":"via Kinopoisk search","Источник данных:":"Data source:","вручную":"manual","через OMDb":"via OMDb","по IMDb ID":"by IMDb ID","поиск на IMDb":"IMDb search","по транслиту":"by transliteration","Добавить фильм":"Add movie","Другой ПК":"Other PC","Удалить постер":"Remove poster","Удаляю постер…":"Removing poster…","Постер удалён":"Poster removed","Удалить профиль Letterboxd?":"Remove the Letterboxd profile?","Загрузка вотчлиста с этого профиля остановится. Фильмы, уже добавленные в вотчлист, останутся.":"Watchlist syncing from this profile will stop. Movies already in your watchlist will stay.","Медиатека на другом компьютере":"Library on another computer","Подключено":"Connected","Вернуться к моей медиатеке":"Back to my library","Ищу компьютеры с Kino в сети…":"Looking for computers with Kino on the network…","Компьютеры в сети не найдены. Введите адрес вручную.":"No computers found on the network. Enter the address manually.","В вашей сети":"On your network","Искать снова":"Search again","Адрес вручную":"Address manually","Подключиться":"Connect","Подключаюсь…":"Connecting…","Продолжить:":"Continue:","На другом компьютере в Kino включите «Доступ с телевизора». PIN показан там же. Через VPN введите IP того компьютера в сети VPN: подключение работает так же, если порт 8765 доступен.":"On the other computer, turn on “TV access” in Kino. The PIN is shown there. Over a VPN, enter that computer's IP on the VPN network: it works the same if port 8765 is reachable.","Удалённая медиатека: ":"Remote library: ","Подключено: ":"Connected: ","Не удалось подключиться":"Could not connect","Укажите адрес":"Enter an address","Неверный PIN":"Wrong PIN","Слишком много попыток, подождите несколько минут":"Too many attempts, wait a few minutes","Нет ответа. Проверьте адрес, порт и что сервер включён на том компьютере.":"No response. Check the address, the port and that the server is on at the other computer.","По этому адресу не Kino":"Not a Kino server at this address","Нет сохранённого подключения":"No saved connection","Не удаётся связаться с удалённым компьютером":"Cannot reach the remote computer","Доступ отклонён, подключитесь заново":"Access denied, connect again","Ошибка удалённой медиатеки":"Remote library error","Недоступно в режиме удалённой медиатеки":"Not available for a remote library","Нет подключения к удалённой медиатеке":"Not connected to a remote library","Сервис временно недоступен, попробуйте позже":"Service is temporarily unavailable, try again later","Запрашивать PIN при подключении":"Require PIN to connect","Любое устройство в вашей сети сможет подключиться без PIN.":"Any device on your network will be able to connect without a PIN.","Доступ с телевизора":"TV access","Включить сервер для Android TV":"Enable server for Android TV","Телевизор и компьютер должны быть в одной сети. Приложение Kino для ТВ найдёт компьютер само.":"The TV and this computer must be on the same network. The Kino TV app will find the computer by itself.","Адрес":"Address","Новый PIN":"New PIN","Подключено устройств:":"Connected devices:","Отключить все":"Disconnect all","Если ТВ не подключается, разрешите Kino в брандмауэре Windows для частной сети.":"If the TV cannot connect, allow Kino in Windows Firewall for private networks.","Закрепить":"Pin","Открепить":"Unpin","Закреплено":"Pinned","Откреплено":"Unpinned","Изменить совпадение":"Change match","Если фильмов с одинаковым названием несколько, найдите нужный и выберите его. Можно писать название и год, например: Spring 2014.":"If several movies share a title, find the right one and pick it. You can type the title and year, for example: Spring 2014.","Выбрать":"Select","Совпадение изменено":"Match changed","Не удалось изменить":"Could not change","По умолчанию":"Default","Добро пожаловать в Kino":"Welcome to Kino","Каталог рекурсивно просканирует все подпапки и найдёт только видеофайлы. Можно добавить несколько папок.":"The catalog scans all subfolders recursively and picks up video files only. You can add several folders.","Папка с фильмами и сериалами":"Folder with movies and series","Добавить ещё папку":"Add another folder","Ключ OMDb":"OMDb key","Откройте сайт omdbapi.com/apikey.aspx, выберите бесплатный тариф (FREE) и укажите почту.":"Open omdbapi.com/apikey.aspx, choose the free plan (FREE) and enter your email.","Подтвердите ключ в письме и вставьте его ниже.":"Confirm the key from the email and paste it below.","Получить ключ OMDb":"Get an OMDb key","Откройте сайт kinopoiskapiunofficial.tech и войдите через почту или GitHub.":"Open kinopoiskapiunofficial.tech and sign in with email or GitHub.","Скопируйте API-ключ из личного кабинета и вставьте его ниже.":"Copy the API key from your account and paste it below.","Получить ключ Кинопоиска":"Get a Kinopoisk key","Без ключа названия, постеры и описания будут находиться неточно и очень медленно. Ключ можно добавить позже в настройках.":"Without a key, titles, posters and descriptions will be matched inaccurately and very slowly. You can add the key later in settings.","Названия, описания и постеры берутся из OMDb. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.":"Titles, descriptions and posters come from OMDb. You can change the poster of a specific movie with a right click on the poster.","Названия, описания и постеры берутся из Кинопоиска. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.":"Titles, descriptions and posters come from Kinopoisk. You can change the poster of a specific movie with a right click on the poster.","Язык определяет названия, описания и источник постеров: русский — Кинопоиск, English — OMDb.":"The language sets titles, descriptions and the poster source: Russian — Kinopoisk, English — OMDb.","Язык определяет названия, описания и источник постеров: русский — Кинопоиск, English — OMDb. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.":"The language sets titles, descriptions and the poster source: Russian — Kinopoisk, English — OMDb. You can change the poster of a specific movie with a right click on the poster.","Начать":"Get started","Сначала выберите папку":"Choose a folder first","Нет доступных источников метаданных. Вставьте API-ключ в настройках или включите поиск через IMDb.":"No metadata sources available. Paste an API key in settings or enable IMDb search.","Ключ Кинопоиска не указан: данные ищутся через IMDb, примерно один фильм за несколько секунд, описания на английском. Вставьте ключ в настройках — будет быстрее и по-русски.":"No Kinopoisk key: data is searched via IMDb, roughly one movie per few seconds, with English descriptions. Paste the key in settings for faster results in Russian.","Ключ OMDb не указан: данные ищутся через сайт IMDb, это медленнее и менее надёжно. Вставьте ключ OMDb в настройках.":"No OMDb key: data is searched via the IMDb website, which is slower and less reliable. Paste an OMDb key in settings.","IMDb временно ограничил запросы. Всё найденное сохранено, повторите чуть позже. С API-ключом такого не бывает.":"IMDb has temporarily limited requests. Everything found is saved, try again a bit later. This does not happen with an API key.","Скрыть":"Hide","Вернуть из скрытых":"Unhide","Скрытое":"Hidden","Скрытых фильмов нет":"No hidden movies","Нажмите правой кнопкой мыши по постеру и выберите «Скрыть».":"Right-click a poster and choose “Hide”.","Фильм скрыт":"Movie hidden","Фильм снова виден":"Movie is visible again","Русский":"Russian","Очистить":"Clear","Загрузить постер из источника":"Load poster from source","Как в настройках":"As in settings","В вотчлисте:":"In watchlist:","Просмотрено:":"Watched:","Открыть профиль на Letterboxd":"Open Letterboxd profile","Язык данных о фильмах":"Movie data language","На каком языке загружать названия и описания для вотчлиста?":"Which language should be used for watchlist titles and descriptions?","OMDb, затем Letterboxd":"OMDb, then Letterboxd","Затемнение":"Dimming","Размытие":"Blur","Данные вотчлиста: спросить при загрузке":"Watchlist data: ask on load","Данные вотчлиста: русский (Кинопоиск)":"Watchlist data: Russian (Kinopoisk)","Данные вотчлиста: English (OMDb, затем Letterboxd)":"Watchlist data: English (OMDb, then Letterboxd)","Вотчлист с letterboxd.com/ник/watchlist подгружается во вкладку Watchlist. Он должен быть открыт для всех.":"Your watchlist from letterboxd.com/username/watchlist is loaded into the Watchlist tab. It must be public.","Letterboxd: в списке":"Letterboxd: in list",", добавлено новых:":", new added:","Ищу постер…":"Looking for the poster…","Возвращаю постер по умолчанию…":"Restoring the default poster…","Постер обновлён":"Poster updated","В этом источнике постер не найден":"No poster found in this source","Для Кинопоиска нужен API-ключ в настройках":"Kinopoisk needs an API key in settings","Неизвестный источник":"Unknown source","Нет данных о фильме":"No data about this movie","Источник временно недоступен":"Source temporarily unavailable","Не удалось сменить постер":"Could not change the poster","Укажите ник Letterboxd (например: idlorem)":"Enter your Letterboxd username (e.g. idlorem)","Укажите ник Letterboxd":"Enter your Letterboxd username","Загружаю вотчлист с Letterboxd…":"Loading your watchlist from Letterboxd…","Профиль или вотчлист не найден. Проверьте ник и что вотчлист открыт для всех.":"Profile or watchlist not found. Check the username and that the watchlist is public.","Letterboxd временно ограничил запросы.":"Letterboxd has temporarily limited requests.","Повторите через":"Try again in","мин.":"min.","Попробуйте чуть позже.":"Try again a bit later.","Вотчлист пуст или закрыт в настройках приватности Letterboxd.":"The watchlist is empty or private in Letterboxd privacy settings.","Не удалось загрузить вотчлист":"Could not load the watchlist","Не удалось перенести":"Could not move","Скопировано:":"Copied:","Загрузка…":"Loading…","Просмотрено":"Move to Watched","Удалить профиль":"Remove profile","Обновить вотчлист":"Refresh watchlist","Загрузить вотчлист":"Load watchlist","Копировать название и год":"Copy title and year","Перенести в Watched":"Move to Watched","Ваш ник на Letterboxd, например: idlorem":"Your Letterboxd username, e.g. idlorem","Ник на Letterboxd, например: idlorem":"Letterboxd username, e.g. idlorem","Letterboxd — ваш вотчлист":"Letterboxd — your watchlist","Перенесено в Watched":"Moved to Watched","(у вас":"(you have",", не удалось:":", failed:","/ серия":"/ episode","API-ключ (X-API-KEY)":"API key (X-API-KEY)","API-ключ отклонён сервисом. Проверьте ключ в настройках.":"The API key was rejected by the service. Check the key in settings.","API-ключ отклонён.":"API key rejected.","TMDB API-ключ или Read Access Token":"TMDB API key or Read Access Token","· из 5":"· out of 5","· метаданные":"· metadata","» · файлов:":"» · files:","Автопоиск заново":"Search again","Автопоиск ничего не нашёл — введите название вручную.":"Auto-search found nothing — enter the title manually.","Без API-ключа":"No API key","Без названия":"Untitled","Бесплатный план: до 500 запросов в сутки. Каждый новый фильм — 2 запроса.":"Free plan: up to 500 requests per day. Each new movie takes 2 requests.","Библиотека":"Library","В Watched пока пусто":"Watched is empty for now","В Watchlist:":"In Watchlist:","В библиотеке":"In library","В списке":"In the list","Введите название выше и нажмите «Добавить» у нужного варианта.":"Enter a title above and press “Add” on the right match.","Вернуть в Not watched":"Move back to Not watched","Версия":"Version","Видеоплеер":"Video player","Видеофайлов не найдено":"No video files found","Внешний плеер (VLC, PotPlayer, MPC-HC…)":"External player (VLC, PotPlayer, MPC-HC…)","Возвращено в Not watched":"Moved back to Not watched","Все жанры":"All genres","Все типы":"All types","Все фильмы из папки находятся во вкладке Watched.":"All movies from the folder are in the Watched tab.","Всё просмотрено":"All watched","Выберите папку с фильмами и сериалами":"Choose a folder with movies and series","Выбрать .exe…":"Choose .exe…","Выбрать папку":"Choose folder","Выбрать фото…":"Choose photo…","ГБ":"GB","Год: новые":"Year: newest","Год: старые":"Year: oldest","Готово":"Done","Добавить":"Add","Добавить папку":"Add folder","Добавить папку…":"Add folder…","Добавлено в вотчлист":"Added to watchlist","Доступна версия":"Version available:","Есть в библиотеке":"In your library","Загрузка обновления…":"Downloading update…","Закрыть (Esc)":"Close (Esc)","Запускаю плеер…":"Starting player…","Запустите программу через main.py или kino.exe — страница работает только внутри окна приложения.":"Run the program via main.py or kino.exe — the page only works inside the app window.","Измените запрос или фильтры.":"Change the query or filters.","Искать через IMDb и Letterboxd, если Кинопоиск не нашёл фильм":"Search IMDb and Letterboxd if Kinopoisk finds nothing","Исправить совпадение":"Fix match","Ищу…":"Searching…","Кинопоиск":"Kinopoisk","Кинопоиск Unofficial — основной источник":"Kinopoisk Unofficial — main source","Ключ Кинопоиска не указан: данные ищутся через IMDb и Letterboxd, примерно один фильм за несколько секунд, описания на английском. Вставьте ключ в настройках — будет быстрее и по-русски.":"No Kinopoisk key: data is searched via IMDb and Letterboxd, roughly one movie every few seconds, descriptions in English. Paste a key in settings — it will be faster and in Russian.","Кэш":"Cache","Кэш сброшен, загружаю заново…":"Cache cleared, reloading…","Лимит запросов исчерпан.":"Request limit reached.","МБ":"MB","Метаданные ещё не загружены. Вставьте API-ключ Кинопоиска в настройках или дождитесь загрузки.":"Metadata is not loaded yet. Paste a Kinopoisk API key in settings or wait for loading.","Метаданные обновлены":"Metadata updated","Можно вставить ссылку: kinopoisk.ru/film/…, letterboxd.com/film/… или imdb.com/title/… Транслит (Izgnanie) понимают IMDb и Letterboxd.":"You can paste a link: kinopoisk.ru/film/…, letterboxd.com/film/… or imdb.com/title/… Transliteration (Izgnanie) is understood by IMDb and Letterboxd.","Можно добавить несколько папок. Каталог рекурсивно просканирует все подпапки и найдёт только видеофайлы. Постеры, описания и рейтинги подтянутся из Кинопоиска.":"You can add several folders. The catalog scans all subfolders and picks up video files only. Posters, descriptions and ratings are loaded from Kinopoisk.","Мой вотчлист":"My watchlist","Нажмите ещё раз для подтверждения":"Click again to confirm","Нажмите правой кнопкой мыши по постеру и выберите «Перенести в Watched».":"Right-click a poster and choose “Move to Watched”.","Название на любом языке, без года — например: битва за битвой":"Title in any language, no year — e.g. one battle after another","Название, ID Кинопоиска или ссылка на фильм":"Title, Kinopoisk ID or movie link","Найти":"Search","Настройки":"Settings","Настройки сохранены":"Settings saved","Не использовать":"Don't use","Не удалось выполнить автопоиск.":"Auto-search failed.","Не удалось добавить":"Could not add","Не удалось запустить":"Could not start","Не удалось изменить":"Could not change","Не удалось обновить":"Could not update","Не удалось применить":"Could not apply","Не удалось проверить:":"Could not check:","Не удалось сохранить настройки":"Could not save settings","Не удалось удалить":"Could not delete","Недавние":"Recent","Нет API-ключа (Настройки).":"No API key (Settings).","Нет в базе":"Not in database","Нет доступных источников метаданных. Включите IMDb/Letterboxd или вставьте API-ключ Кинопоиска в настройках.":"No metadata sources available. Enable IMDb/Letterboxd or paste a Kinopoisk API key in settings.","Нет метаданных":"No metadata","Нет на диске":"Not on disk","Нет подключения к интернету или сервис недоступен. Показаны данные из кэша и заглушки.":"No internet connection or the service is unavailable. Showing cached data and placeholders.","Нет подключения к интернету.":"No internet connection.","Нет связи с Python":"No connection to Python","Нет связи с приложением":"No connection to the app","Ничего не найдено":"Nothing found","Ничего не найдено. Попробуйте другое название или ID.":"Nothing found. Try another title or ID.","Ничего не найдено. Попробуйте другое написание или латиницу.":"Nothing found. Try another spelling or Latin letters.","Обновить":"Update","Обновления":"Updates","Общий размер":"Total size","Оставить запись в Watched":"Keep the entry in Watched","Открыть на":"Open on","Открыть на Letterboxd":"Open on Letterboxd","Отмена":"Cancel","Ошибка API.":"API error.","Ошибка поиска":"Search error","Ошибка связи":"Connection error","Ошибка связи с приложением":"App connection error","Ошибка сканирования":"Scan error","Папка не выбрана":"No folder selected","Папка недоступна:":"Folder unavailable:","Папки не выбраны":"No folders selected","Папки пересканированы":"Folders rescanned","Перезапуск…":"Restarting…","Перенесено в Watched":"Moved to Watched","Перенести в Watched":"Move to Watched","Пересканировать":"Rescan","Пересканировать папки":"Rescan folders","По названию":"By title","По рейтингу":"By rating","Повторить":"Retry","Позже":"Later","Поиск по названию…   ( / )":"Search by title…   ( / )","Поиск по названию…":"Search by title…","Поиск…":"Searching…","Показать в папке":"Show in folder","Показать файл в папке":"Show file in folder","Показать/скрыть":"Show/hide","Показывать рейтинг и ссылку Letterboxd":"Show Letterboxd rating and link","Получить бесплатный ключ":"Get a free key","Получить ключ TMDB":"Get a TMDB key","Проверить сейчас":"Check now","Проверка…":"Checking…","Проверять обновления при запуске":"Check for updates on startup","Продолжить":"Continue","Размер":"Size","Размер постеров (двойной клик — сбросить)":"Poster size (double-click to reset)","Распознано из имени файла:":"Parsed from file name:","Резервный источник":"Fallback source","Ручные привязки сохраняются. После сброса данные загрузятся заново (расходуются запросы API).":"Manual matches are kept. After clearing, data is reloaded (uses API requests).","Сбросить кэш метаданных":"Clear metadata cache","Свой цвет":"Custom color","Своё фото":"Custom photo","Сезон":"Season","Сезоны и серии":"Seasons and episodes","Сериал":"Series","Сериалы":"Series","Серия":"Episode","Системный плеер по умолчанию":"System default player","Сканирование папки…":"Scanning folder…","Сканировать":"Scan","Скачать":"Download","Слишком много запросов — сервис просит подождать. Попробуйте чуть позже.":"Too many requests — the service asks to wait. Try again in a moment.","Смотреть":"Watch","Совпадение исправлено":"Match fixed","Сохранить":"Save","Список пока пуст.":"The list is empty for now.","Стандартный (тёмный)":"Default (dark)","Страны:":"Countries:","Суточный лимит запросов API исчерпан. Уже загруженное сохранено в кэш — продолжим позже.":"Daily API request limit reached. What is already loaded is saved in the cache — we will continue later.","У вас последняя версия (":"You have the latest version (","Убрано из Watched":"Removed from Watched","Убрано из вотчлиста":"Removed from watchlist","Убрать из Watched":"Remove from Watched","Убрать из Watchlist":"Remove from Watchlist","Убрать из вотчлиста":"Remove from watchlist","Убрать из каталога (файлы не удаляются)":"Remove from catalog (files are not deleted)","Убрать фото":"Remove photo","Удалено файлов:":"Files deleted:","Удалено:":"Deleted:","Удалить":"Delete","Удалить навсегда, минуя Корзину":"Delete permanently, skip the Recycle Bin","Удалить с компьютера?":"Delete from computer?","Удалить с компьютера…":"Delete from computer…","Удалить файл с компьютера…":"Delete file from computer…","Удаляю…":"Deleting…","Укажите .exe файл плеера или выберите системный":"Choose the player .exe or select the system player","Файл":"File","Файл .exe не выбран":"No .exe file selected","Файлов":"Files","Файлов на диске нет — осталась только запись в Watched.":"No files on disk — only the Watched entry remains.","Файлы":"Files","Файлы будут перемещены в Корзину Windows, их можно восстановить.":"Files will be moved to the Windows Recycle Bin and can be restored.","Файлы будут удалены безвозвратно.":"Files will be deleted permanently.","Файлы из всех папок собираются в один каталог.":"Files from all folders are combined into one catalog.","Файлы:":"Files:","Фильм":"Movie","Фильм не найден в базе по названию файла. Нажмите «Исправить совпадение» и найдите его вручную.":"The movie was not found by file name. Press “Fix match” and find it manually.","Фильмы":"Movies","Фон":"Background","Формат":"Format","Форматы":"Formats","Фото выбрано":"Photo selected","Фото не выбрано":"No photo selected","Что хотите посмотреть?":"What do you want to watch?","из":"of","мин":"min","нет на диске":"not on disk","нет связи с GitHub":"no connection to GitHub","файл(ов) в каталоге":"file(s) in catalog","эп.":"ep.","— в Корзине":"— in Recycle Bin","…и ещё":"…and more","Язык":"Language","Язык интерфейса":"Interface language","Названия на английском подгружаются с IMDb.":"English titles are loaded from IMDb.","Описания фильмов остаются на языке источника.":"Movie descriptions stay in the source language.","Ключ Кинопоиска":"Kinopoisk key","Выбранные папки недоступны":"Selected folders are unavailable","Элемент не найден":"Item not found","Элемент не найден. Обновите каталог.":"Item not found. Refresh the catalog.","Введите название, ID или ссылку":"Enter a title, ID or link","Не указан API-ключ Кинопоиска (Настройки)":"Kinopoisk API key is not set (Settings)","Не указан API-ключ TMDB (Настройки)":"TMDB API key is not set (Settings)","Нет подключения к интернету":"No internet connection","API-ключ отклонён":"API key rejected","Суточный лимит запросов исчерпан":"Daily request limit reached","Слишком много запросов, подождите":"Too many requests, please wait","Сайт временно блокирует запросы, попробуйте позже":"The site is temporarily blocking requests, try later","Ошибка запроса:":"Request error:","Суточный лимит Кинопоиска исчерпан — продолжим завтра, пока работают IMDb и TMDB.":"Kinopoisk daily limit reached — we will continue tomorrow while IMDb and TMDB are used.","API-ключ Кинопоиска отклонён — проверьте его в настройках.":"The Kinopoisk API key was rejected — check it in settings.","Русские названия лучше всего находятся с ключом Кинопоиска (Настройки). Без него попробуйте латиницей.":"Russian titles are found best with a Kinopoisk key (Settings). Without it, try Latin letters.","Некорректный вариант":"Invalid option","Недопустимый адрес обновления":"Invalid update address","Не удалось скачать обновление (HTTP":"Could not download the update (HTTP","Файл обновления слишком большой":"The update file is too large","Скачанный файл повреждён":"The downloaded file is corrupted","Скачанный файл не похож на Kino":"The downloaded file does not look like kino","Скачанный файл не является программой":"The downloaded file is not a program","Нужен JPEG":"A JPEG is required","Файл слишком большой":"The file is too large","Повреждённые данные":"Corrupted data","Не JPEG":"Not a JPEG","Нет файлов для удаления":"No files to delete","файл вне выбранной папки":"file is outside the selected folder","Файл не входит в каталог. Обновите список.":"The file is not in the catalog. Refresh the list.","Файл не найден (возможно, диск отключён).":"File not found (the drive may be disconnected).","Файл плеера не найден. Укажите .exe в настройках.":"Player file not found. Choose an .exe in settings.","Не удалось запустить:":"Could not start:","GitHub вернул HTTP":"GitHub returned HTTP","не удалось переместить в Корзину (код":"could not move to the Recycle Bin (code","Корзина доступна только в Windows":"The Recycle Bin is only available on Windows","аниме":"anime","биография":"biography","боевик":"action","вестерн":"western","военный":"war","детектив":"mystery","детский":"kids","для взрослых":"adult","документальный":"documentary","драма":"drama","игра":"game show","история":"history","комедия":"comedy","концерт":"concert","короткометражка":"short","криминал":"crime","мелодрама":"romance","музыка":"music","мультфильм":"animation","мюзикл":"musical","новости":"news","приключения":"adventure","реальное ТВ":"reality TV","семейный":"family","спорт":"sport","ток-шоу":"talk show","триллер":"thriller","ужасы":"horror","фантастика":"sci-fi","фильм-нуар":"film noir","нуар":"noir","фэнтези":"fantasy","церемония":"ceremony","телефильм":"TV movie","мини-сериал":"miniseries","США":"USA","Россия":"Russia","СССР":"USSR","Великобритания":"United Kingdom","Франция":"France","Германия":"Germany","Япония":"Japan","Южная Корея":"South Korea","Китай":"China","Италия":"Italy","Испания":"Spain","Канада":"Canada","Австралия":"Australia","Индия":"India","Швеция":"Sweden","Дания":"Denmark","Норвегия":"Norway","Польша":"Poland","Украина":"Ukraine","Беларусь":"Belarus","Турция":"Turkey","Мексика":"Mexico","Бразилия":"Brazil","Гонконг":"Hong Kong","Ирландия":"Ireland","Нидерланды":"Netherlands","Бельгия":"Belgium","Финляндия":"Finland","Чехия":"Czech Republic","Австрия":"Austria","Швейцария":"Switzerland","Новая Зеландия":"New Zealand","Аргентина":"Argentina","Таиланд":"Thailand","Тайвань":"Taiwan","Грузия":"Georgia","Казахстан":"Kazakhstan","Латвия":"Latvia","Литва":"Lithuania","Эстония":"Estonia","Германия (ФРГ)":"West Germany","ГДР":"East Germany","Югославия":"Yugoslavia","Чехословакия":"Czechoslovakia","Венгрия":"Hungary","Румыния":"Romania","Болгария":"Bulgaria","Сербия":"Serbia","Хорватия":"Croatia","Греция":"Greece","Португалия":"Portugal","Израиль":"Israel","Иран":"Iran","Египет":"Egypt","ЮАР":"South Africa","Куба":"Cuba","Чили":"Chile","Колумбия":"Colombia","Перу":"Peru","Исландия":"Iceland","Люксембург":"Luxembourg","Монако":"Monaco","Мальта":"Malta","Филиппины":"Philippines","Индонезия":"Indonesia","Малайзия":"Malaysia","Сингапур":"Singapore","Вьетнам":"Vietnam","Пакистан":"Pakistan","Армения":"Armenia","Азербайджан":"Azerbaijan","Узбекистан":"Uzbekistan","Молдова":"Moldova","Алжир":"Algeria","Марокко":"Morocco","Тунис":"Tunisia","Нигерия":"Nigeria","Ливан":"Lebanon","Саудовская Аравия":"Saudi Arabia","ОАЭ":"UAE","Катар":"Qatar","Словакия":"Slovakia","Словения":"Slovenia","Босния и Герцеговина":"Bosnia and Herzegovina","Македония":"North Macedonia","Албания":"Albania","Кипр":"Cyprus","Бангладеш":"Bangladesh","Непал":"Nepal","Камбоджа":"Cambodia","Монголия":"Mongolia","Кыргызстан":"Kyrgyzstan","Таджикистан":"Tajikistan","Туркменистан":"Turkmenistan","Эфиопия":"Ethiopia","Кения":"Kenya","Венесуэла":"Venezuela","Уругвай":"Uruguay","Боливия":"Bolivia","Парагвай":"Paraguay","Эквадор":"Ecuador","Пуэрто-Рико":"Puerto Rico","Ямайка":"Jamaica","Доминикана":"Dominican Republic","Лихтенштейн":"Liechtenstein","В выбранных папках нет поддерживаемых видео (mp4, mkv, avi, mov, wmv, flv, webm, m4v, ts, DVD и Blu-ray папки). Семплы и прочие файлы игнорируются.":"No supported videos in the selected folders (mp4, mkv, avi, mov, wmv, flv, webm, m4v, ts, DVD and Blu-ray folders). Samples and other files are ignored.","Источник постеров":"Poster source","Авто (как у найденного фильма)":"Auto (from the matched source)","IMDb":"IMDb","Letterboxd":"Letterboxd","Если у фильма нет постера в выбранном источнике, остаётся постер по умолчанию. Недостающие подгружаются в фоне и запоминаются.":"If a movie has no poster in the selected source, the default poster stays. Missing ones are loaded in the background and remembered.","Источник описания":"Description source","Авто (Кинопоиск для русского, IMDb или Letterboxd для английского)":"Auto (Kinopoisk for Russian, IMDb or Letterboxd for English)","Если в выбранном источнике нет описания, остаётся исходное. Недостающие подгружаются в фоне и запоминаются.":"If the selected source has no description, the original one stays. Missing ones are loaded in the background and remembered.","Рейтинг на карточках":"Rating on cards","Сохранить постер как PNG…":"Save poster as PNG…","Постер сохранён":"Poster saved","Не удалось загрузить постер":"Could not load the poster","Не удалось сохранить постер":"Could not save the poster","Отменить":"Undo","Вырезать":"Cut","Копировать":"Copy","Вставить":"Paste","Выделить всё":"Select all","IMDb или Letterboxd временно ограничили запросы. Всё найденное сохранено, повторите чуть позже. С ключом Кинопоиска такого не бывает.":"IMDb or Letterboxd temporarily limited requests. Everything found is saved, try again a bit later. This does not happen with a Kinopoisk key.","OMDb — данные IMDb через API":"OMDb — IMDb data via API","OMDb API-ключ":"OMDb API key","Получить бесплатный ключ OMDb":"Get a free OMDb key","До 1000 запросов в сутки. Заменяет разбор сайта IMDb: надёжнее и без блокировок.":"Up to 1000 requests per day. Replaces scraping the IMDb site: more reliable and never blocked."};
+const EN_DICT={"Бесплатный план: до 1000 запросов в сутки.":"Free plan: up to 1000 requests per day.","Запомнить выбор":"Remember my choice","Запуск с системой":"Start with Windows","Выключено":"Off","Свернуто в трей":"Minimized to tray","Развернуто":"Normal window","Чем открывать фильмы по сети?":"How to open movies over the network?","Выбрать .exe плеера…":"Choose player .exe…","Открывать в браузере":"Open in the browser","Не удалось сохранить":"Could not save","Плеер для сети:":"Network player:","из настроек":"from settings","браузер":"browser","спросить при запуске":"ask on play","Сменить":"Change","Укажите .exe файл плеера":"Choose the player .exe file","При закрытии сворачивать в трей":"Minimize to tray on close","Открыть Kino":"Open Kino","через поиск по Кинопоиску":"via Kinopoisk search","Источник данных:":"Data source:","вручную":"manual","через OMDb":"via OMDb","по IMDb ID":"by IMDb ID","поиск на IMDb":"IMDb search","по транслиту":"by transliteration","Добавить фильм":"Add movie","Другой ПК":"Other PC","Удалить постер":"Remove poster","Удаляю постер…":"Removing poster…","Постер удалён":"Poster removed","Удалить профиль Letterboxd?":"Remove the Letterboxd profile?","Загрузка вотчлиста с этого профиля остановится. Фильмы, уже добавленные в вотчлист, останутся.":"Watchlist syncing from this profile will stop. Movies already in your watchlist will stay.","Медиатека на другом компьютере":"Library on another computer","Подключено":"Connected","Вернуться к моей медиатеке":"Back to my library","Ищу компьютеры с Kino в сети…":"Looking for computers with Kino on the network…","Компьютеры в сети не найдены. Введите адрес вручную.":"No computers found on the network. Enter the address manually.","В вашей сети":"On your network","Искать снова":"Search again","Адрес вручную":"Address manually","Подключиться":"Connect","Подключаюсь…":"Connecting…","Продолжить:":"Continue:","На другом компьютере в Kino включите «Доступ с телевизора». PIN показан там же. Через VPN введите IP того компьютера в сети VPN: подключение работает так же, если порт 8765 доступен.":"On the other computer, turn on “TV access” in Kino. The PIN is shown there. Over a VPN, enter that computer's IP on the VPN network: it works the same if port 8765 is reachable.","Удалённая медиатека: ":"Remote library: ","Подключено: ":"Connected: ","Не удалось подключиться":"Could not connect","Укажите адрес":"Enter an address","Неверный PIN":"Wrong PIN","Слишком много попыток, подождите несколько минут":"Too many attempts, wait a few minutes","Нет ответа. Проверьте адрес, порт и что сервер включён на том компьютере.":"No response. Check the address, the port and that the server is on at the other computer.","По этому адресу не Kino":"Not a Kino server at this address","Нет сохранённого подключения":"No saved connection","Не удаётся связаться с удалённым компьютером":"Cannot reach the remote computer","Доступ отклонён, подключитесь заново":"Access denied, connect again","Ошибка удалённой медиатеки":"Remote library error","Недоступно в режиме удалённой медиатеки":"Not available for a remote library","Нет подключения к удалённой медиатеке":"Not connected to a remote library","Сервис временно недоступен, попробуйте позже":"Service is temporarily unavailable, try again later","Запрашивать PIN при подключении":"Require PIN to connect","Любое устройство в вашей сети сможет подключиться без PIN.":"Any device on your network will be able to connect without a PIN.","Доступ с телевизора":"TV access","Включить сервер для Android TV":"Enable server for Android TV","Телевизор и компьютер должны быть в одной сети. Приложение Kino для ТВ найдёт компьютер само.":"The TV and this computer must be on the same network. The Kino TV app will find the computer by itself.","Адрес":"Address","Новый PIN":"New PIN","Подключено устройств:":"Connected devices:","Отключить все":"Disconnect all","Если ТВ не подключается, разрешите Kino в брандмауэре Windows для частной сети.":"If the TV cannot connect, allow Kino in Windows Firewall for private networks.","Закрепить":"Pin","Открепить":"Unpin","Закреплено":"Pinned","Откреплено":"Unpinned","Изменить совпадение":"Change match","Если фильмов с одинаковым названием несколько, найдите нужный и выберите его. Можно писать название и год, например: Spring 2014.":"If several movies share a title, find the right one and pick it. You can type the title and year, for example: Spring 2014.","Выбрать":"Select","Совпадение изменено":"Match changed","Не удалось изменить":"Could not change","По умолчанию":"Default","Добро пожаловать в Kino":"Welcome to Kino","Каталог рекурсивно просканирует все подпапки и найдёт только видеофайлы. Можно добавить несколько папок.":"The catalog scans all subfolders recursively and picks up video files only. You can add several folders.","Папка с фильмами и сериалами":"Folder with movies and series","Добавить ещё папку":"Add another folder","Ключ OMDb":"OMDb key","Откройте сайт omdbapi.com/apikey.aspx, выберите бесплатный тариф (FREE) и укажите почту.":"Open omdbapi.com/apikey.aspx, choose the free plan (FREE) and enter your email.","Подтвердите ключ в письме и вставьте его ниже.":"Confirm the key from the email and paste it below.","Получить ключ OMDb":"Get an OMDb key","Откройте сайт kinopoiskapiunofficial.tech и войдите через почту или GitHub.":"Open kinopoiskapiunofficial.tech and sign in with email or GitHub.","Скопируйте API-ключ из личного кабинета и вставьте его ниже.":"Copy the API key from your account and paste it below.","Получить ключ Кинопоиска":"Get a Kinopoisk key","Без ключа названия, постеры и описания будут находиться неточно и очень медленно. Ключ можно добавить позже в настройках.":"Without a key, titles, posters and descriptions will be matched inaccurately and very slowly. You can add the key later in settings.","Названия, описания и постеры берутся из OMDb. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.":"Titles, descriptions and posters come from OMDb. You can change the poster of a specific movie with a right click on the poster.","Названия, описания и постеры берутся из Кинопоиска. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.":"Titles, descriptions and posters come from Kinopoisk. You can change the poster of a specific movie with a right click on the poster.","Начать":"Get started","Сначала выберите папку":"Choose a folder first","Нет доступных источников метаданных. Вставьте API-ключ в настройках или включите поиск через IMDb.":"No metadata sources available. Paste an API key in settings or enable IMDb search.","Ключ Кинопоиска не указан: данные ищутся через IMDb, примерно один фильм за несколько секунд, описания на английском. Вставьте ключ в настройках — будет быстрее и по-русски.":"No Kinopoisk key: data is searched via IMDb, roughly one movie per few seconds, with English descriptions. Paste the key in settings for faster results in Russian.","Ключ OMDb не указан: данные ищутся через сайт IMDb, это медленнее и менее надёжно. Вставьте ключ OMDb в настройках.":"No OMDb key: data is searched via the IMDb website, which is slower and less reliable. Paste an OMDb key in settings.","IMDb временно ограничил запросы. Всё найденное сохранено, повторите чуть позже. С API-ключом такого не бывает.":"IMDb has temporarily limited requests. Everything found is saved, try again a bit later. This does not happen with an API key.","Скрыть":"Hide","Вернуть из скрытых":"Unhide","Скрытое":"Hidden","Скрытых фильмов нет":"No hidden movies","Нажмите правой кнопкой мыши по постеру и выберите «Скрыть».":"Right-click a poster and choose “Hide”.","Фильм скрыт":"Movie hidden","Фильм снова виден":"Movie is visible again","Русский":"Russian","Очистить":"Clear","Загрузить постер из источника":"Load poster from source","Как в настройках":"As in settings","В вотчлисте:":"In watchlist:","Просмотрено:":"Watched:","Открыть профиль на Letterboxd":"Open Letterboxd profile","Язык данных о фильмах":"Movie data language","На каком языке загружать названия и описания для вотчлиста?":"Which language should be used for watchlist titles and descriptions?","OMDb, затем Letterboxd":"OMDb, then Letterboxd","Затемнение":"Dimming","Размытие":"Blur","Данные вотчлиста: спросить при загрузке":"Watchlist data: ask on load","Данные вотчлиста: русский (Кинопоиск)":"Watchlist data: Russian (Kinopoisk)","Данные вотчлиста: English (OMDb, затем Letterboxd)":"Watchlist data: English (OMDb, then Letterboxd)","Letterboxd: в списке":"Letterboxd: in list",", добавлено новых:":", new added:","Ищу постер…":"Looking for the poster…","Возвращаю постер по умолчанию…":"Restoring the default poster…","Постер обновлён":"Poster updated","В этом источнике постер не найден":"No poster found in this source","Для Кинопоиска нужен API-ключ в настройках":"Kinopoisk needs an API key in settings","Неизвестный источник":"Unknown source","Нет данных о фильме":"No data about this movie","Источник временно недоступен":"Source temporarily unavailable","Не удалось сменить постер":"Could not change the poster","Укажите ник Letterboxd (например: idlorem)":"Enter your Letterboxd username (e.g. idlorem)","Укажите ник Letterboxd":"Enter your Letterboxd username","Загружаю вотчлист с Letterboxd…":"Loading your watchlist from Letterboxd…","Профиль или вотчлист не найден. Проверьте ник и что вотчлист открыт для всех.":"Profile or watchlist not found. Check the username and that the watchlist is public.","Letterboxd временно ограничил запросы.":"Letterboxd has temporarily limited requests.","Повторите через":"Try again in","мин.":"min.","Попробуйте чуть позже.":"Try again a bit later.","Вотчлист пуст или закрыт в настройках приватности Letterboxd.":"The watchlist is empty or private in Letterboxd privacy settings.","Не удалось загрузить вотчлист":"Could not load the watchlist","Не удалось перенести":"Could not move","Скопировано:":"Copied:","Загрузка…":"Loading…","Просмотрено":"Move to Watched","Удалить профиль":"Remove profile","Обновить вотчлист":"Refresh watchlist","Загрузить вотчлист":"Load watchlist","Копировать название и год":"Copy title and year","Перенести в Watched":"Move to Watched","Ваш ник на Letterboxd, например: idlorem":"Your Letterboxd username, e.g. idlorem","Ник на Letterboxd, например: idlorem":"Letterboxd username, e.g. idlorem","Letterboxd — ваш вотчлист":"Letterboxd — your watchlist","Перенесено в Watched":"Moved to Watched","(у вас":"(you have",", не удалось:":", failed:","/ серия":"/ episode","API-ключ (X-API-KEY)":"API key (X-API-KEY)","API-ключ отклонён сервисом. Проверьте ключ в настройках.":"The API key was rejected by the service. Check the key in settings.","API-ключ отклонён.":"API key rejected.","TMDB API-ключ или Read Access Token":"TMDB API key or Read Access Token","· из 5":"· out of 5","· метаданные":"· metadata","» · файлов:":"» · files:","Автопоиск заново":"Search again","Автопоиск ничего не нашёл — введите название вручную.":"Auto-search found nothing — enter the title manually.","Без названия":"Untitled","Бесплатный план: до 500 запросов в сутки. Каждый новый фильм — 2 запроса.":"Free plan: up to 500 requests per day. Each new movie takes 2 requests.","Библиотека":"Library","В Watched пока пусто":"Watched is empty for now","В Watchlist:":"In Watchlist:","В библиотеке":"In library","В списке":"In the list","Введите название выше и нажмите «Добавить» у нужного варианта.":"Enter a title above and press “Add” on the right match.","Вернуть в Not watched":"Move back to Not watched","Версия":"Version","Видеоплеер":"Video player","Видеофайлов не найдено":"No video files found","Внешний плеер (VLC, PotPlayer, MPC-HC…)":"External player (VLC, PotPlayer, MPC-HC…)","Возвращено в Not watched":"Moved back to Not watched","Все жанры":"All genres","Все типы":"All types","Все фильмы из папки находятся во вкладке Watched.":"All movies from the folder are in the Watched tab.","Всё просмотрено":"All watched","Выберите папку с фильмами и сериалами":"Choose a folder with movies and series","Выбрать .exe…":"Choose .exe…","Выбрать папку":"Choose folder","Выбрать фото…":"Choose photo…","ГБ":"GB","Год: новые":"Year: newest","Год: старые":"Year: oldest","Готово":"Done","Добавить":"Add","Добавить папку":"Add folder","Добавить папку…":"Add folder…","Добавлено в вотчлист":"Added to watchlist","Доступна версия":"Version available:","Есть в библиотеке":"In your library","Загрузка обновления…":"Downloading update…","Закрыть (Esc)":"Close (Esc)","Запускаю плеер…":"Starting player…","Запустите программу через main.py или kino.exe — страница работает только внутри окна приложения.":"Run the program via main.py or kino.exe — the page only works inside the app window.","Измените запрос или фильтры.":"Change the query or filters.","Исправить совпадение":"Fix match","Ищу…":"Searching…","Кинопоиск":"Kinopoisk","Кинопоиск Unofficial — основной источник":"Kinopoisk Unofficial — main source","Ключ Кинопоиска не указан: данные ищутся через IMDb и Letterboxd, примерно один фильм за несколько секунд, описания на английском. Вставьте ключ в настройках — будет быстрее и по-русски.":"No Kinopoisk key: data is searched via IMDb and Letterboxd, roughly one movie every few seconds, descriptions in English. Paste a key in settings — it will be faster and in Russian.","Кэш":"Cache","Кэш сброшен, загружаю заново…":"Cache cleared, reloading…","Лимит запросов исчерпан.":"Request limit reached.","МБ":"MB","Метаданные ещё не загружены. Вставьте API-ключ Кинопоиска в настройках или дождитесь загрузки.":"Metadata is not loaded yet. Paste a Kinopoisk API key in settings or wait for loading.","Метаданные обновлены":"Metadata updated","Можно вставить ссылку: kinopoisk.ru/film/…, letterboxd.com/film/… или imdb.com/title/… Транслит (Izgnanie) понимают IMDb и Letterboxd.":"You can paste a link: kinopoisk.ru/film/…, letterboxd.com/film/… or imdb.com/title/… Transliteration (Izgnanie) is understood by IMDb and Letterboxd.","Можно добавить несколько папок. Каталог рекурсивно просканирует все подпапки и найдёт только видеофайлы. Постеры, описания и рейтинги подтянутся из Кинопоиска.":"You can add several folders. The catalog scans all subfolders and picks up video files only. Posters, descriptions and ratings are loaded from Kinopoisk.","Мой вотчлист":"My watchlist","Нажмите ещё раз для подтверждения":"Click again to confirm","Нажмите правой кнопкой мыши по постеру и выберите «Перенести в Watched».":"Right-click a poster and choose “Move to Watched”.","Название на любом языке, без года — например: битва за битвой":"Title in any language, no year — e.g. one battle after another","Название, ID Кинопоиска или ссылка на фильм":"Title, Kinopoisk ID or movie link","Найти":"Search","Настройки":"Settings","Настройки сохранены":"Settings saved","Не использовать":"Don't use","Не удалось выполнить автопоиск.":"Auto-search failed.","Не удалось добавить":"Could not add","Не удалось запустить":"Could not start","Не удалось изменить":"Could not change","Не удалось обновить":"Could not update","Не удалось применить":"Could not apply","Не удалось проверить:":"Could not check:","Не удалось сохранить настройки":"Could not save settings","Не удалось удалить":"Could not delete","Недавние":"Recent","Нет API-ключа (Настройки).":"No API key (Settings).","Нет в базе":"Not in database","Нет доступных источников метаданных. Включите IMDb/Letterboxd или вставьте API-ключ Кинопоиска в настройках.":"No metadata sources available. Enable IMDb/Letterboxd or paste a Kinopoisk API key in settings.","Нет метаданных":"No metadata","Нет на диске":"Not on disk","Нет подключения к интернету или сервис недоступен. Показаны данные из кэша и заглушки.":"No internet connection or the service is unavailable. Showing cached data and placeholders.","Нет подключения к интернету.":"No internet connection.","Нет связи с Python":"No connection to Python","Нет связи с приложением":"No connection to the app","Ничего не найдено":"Nothing found","Ничего не найдено. Попробуйте другое название или ID.":"Nothing found. Try another title or ID.","Ничего не найдено. Попробуйте другое написание или латиницу.":"Nothing found. Try another spelling or Latin letters.","Обновить":"Update","Обновления":"Updates","Общий размер":"Total size","Оставить запись в Watched":"Keep the entry in Watched","Открыть на":"Open on","Открыть на Letterboxd":"Open on Letterboxd","Отмена":"Cancel","Ошибка API.":"API error.","Ошибка поиска":"Search error","Ошибка связи":"Connection error","Ошибка связи с приложением":"App connection error","Ошибка сканирования":"Scan error","Папка не выбрана":"No folder selected","Папка недоступна:":"Folder unavailable:","Папки не выбраны":"No folders selected","Папки пересканированы":"Folders rescanned","Перезапуск…":"Restarting…","Перенесено в Watched":"Moved to Watched","Перенести в Watched":"Move to Watched","Пересканировать":"Rescan","Пересканировать папки":"Rescan folders","По названию":"By title","По рейтингу":"By rating","Повторить":"Retry","Позже":"Later","Поиск по названию…   ( / )":"Search by title…   ( / )","Поиск по названию…":"Search by title…","Поиск…":"Searching…","Показать в папке":"Show in folder","Показать файл в папке":"Show file in folder","Показать/скрыть":"Show/hide","Показывать рейтинг и ссылку Letterboxd":"Show Letterboxd rating and link","Получить бесплатный ключ":"Get a free key","Получить ключ TMDB":"Get a TMDB key","Проверить сейчас":"Check now","Проверка…":"Checking…","Проверять обновления при запуске":"Check for updates on startup","Продолжить":"Continue","Размер":"Size","Размер постеров (двойной клик — сбросить)":"Poster size (double-click to reset)","Распознано из имени файла:":"Parsed from file name:","Резервный источник":"Fallback source","Ручные привязки сохраняются. После сброса данные загрузятся заново (расходуются запросы API).":"Manual matches are kept. After clearing, data is reloaded (uses API requests).","Сбросить кэш метаданных":"Clear metadata cache","Свой цвет":"Custom color","Своё фото":"Custom photo","Сезон":"Season","Сезоны и серии":"Seasons and episodes","Сериал":"Series","Сериалы":"Series","Серия":"Episode","Системный плеер по умолчанию":"System default player","Сканирование папки…":"Scanning folder…","Сканировать":"Scan","Скачать":"Download","Слишком много запросов — сервис просит подождать. Попробуйте чуть позже.":"Too many requests — the service asks to wait. Try again in a moment.","Смотреть":"Watch","Совпадение исправлено":"Match fixed","Сохранить":"Save","Список пока пуст.":"The list is empty for now.","Стандартный (тёмный)":"Default (dark)","Страны:":"Countries:","Суточный лимит запросов API исчерпан. Уже загруженное сохранено в кэш — продолжим позже.":"Daily API request limit reached. What is already loaded is saved in the cache — we will continue later.","У вас последняя версия (":"You have the latest version (","Убрано из Watched":"Removed from Watched","Убрано из вотчлиста":"Removed from watchlist","Убрать из Watched":"Remove from Watched","Убрать из Watchlist":"Remove from Watchlist","Убрать из вотчлиста":"Remove from watchlist","Убрать из каталога (файлы не удаляются)":"Remove from catalog (files are not deleted)","Убрать фото":"Remove photo","Удалено файлов:":"Files deleted:","Удалено:":"Deleted:","Удалить":"Delete","Удалить навсегда, минуя Корзину":"Delete permanently, skip the Recycle Bin","Удалить с компьютера?":"Delete from computer?","Удалить с компьютера…":"Delete from computer…","Удалить файл с компьютера…":"Delete file from computer…","Удаляю…":"Deleting…","Укажите .exe файл плеера или выберите системный":"Choose the player .exe or select the system player","Файл":"File","Файл .exe не выбран":"No .exe file selected","Файлов":"Files","Файлов на диске нет — осталась только запись в Watched.":"No files on disk — only the Watched entry remains.","Файлы":"Files","Файлы будут перемещены в Корзину Windows, их можно восстановить.":"Files will be moved to the Windows Recycle Bin and can be restored.","Файлы будут удалены безвозвратно.":"Files will be deleted permanently.","Файлы:":"Files:","Фильм":"Movie","Фильм не найден в базе по названию файла. Нажмите «Исправить совпадение» и найдите его вручную.":"The movie was not found by file name. Press “Fix match” and find it manually.","Фильмы":"Movies","Фон":"Background","Формат":"Format","Форматы":"Formats","Фото выбрано":"Photo selected","Фото не выбрано":"No photo selected","Что хотите посмотреть?":"What do you want to watch?","из":"of","мин":"min","нет на диске":"not on disk","нет связи с GitHub":"no connection to GitHub","файл(ов) в каталоге":"file(s) in catalog","эп.":"ep.","— в Корзине":"— in Recycle Bin","…и ещё":"…and more","Язык":"Language","Язык интерфейса":"Interface language","Названия на английском подгружаются с IMDb.":"English titles are loaded from IMDb.","Описания фильмов остаются на языке источника.":"Movie descriptions stay in the source language.","Ключ Кинопоиска":"Kinopoisk key","Выбранные папки недоступны":"Selected folders are unavailable","Элемент не найден":"Item not found","Элемент не найден. Обновите каталог.":"Item not found. Refresh the catalog.","Введите название, ID или ссылку":"Enter a title, ID or link","Не указан API-ключ Кинопоиска (Настройки)":"Kinopoisk API key is not set (Settings)","Не указан API-ключ TMDB (Настройки)":"TMDB API key is not set (Settings)","Нет подключения к интернету":"No internet connection","API-ключ отклонён":"API key rejected","Суточный лимит запросов исчерпан":"Daily request limit reached","Слишком много запросов, подождите":"Too many requests, please wait","Сайт временно блокирует запросы, попробуйте позже":"The site is temporarily blocking requests, try later","Ошибка запроса:":"Request error:","Суточный лимит Кинопоиска исчерпан — продолжим завтра, пока работают IMDb и TMDB.":"Kinopoisk daily limit reached — we will continue tomorrow while IMDb and TMDB are used.","API-ключ Кинопоиска отклонён — проверьте его в настройках.":"The Kinopoisk API key was rejected — check it in settings.","Русские названия лучше всего находятся с ключом Кинопоиска (Настройки). Без него попробуйте латиницей.":"Russian titles are found best with a Kinopoisk key (Settings). Without it, try Latin letters.","Некорректный вариант":"Invalid option","Недопустимый адрес обновления":"Invalid update address","Не удалось скачать обновление (HTTP":"Could not download the update (HTTP","Файл обновления слишком большой":"The update file is too large","Скачанный файл повреждён":"The downloaded file is corrupted","Скачанный файл не похож на Kino":"The downloaded file does not look like kino","Скачанный файл не является программой":"The downloaded file is not a program","Нужен JPEG":"A JPEG is required","Файл слишком большой":"The file is too large","Повреждённые данные":"Corrupted data","Не JPEG":"Not a JPEG","Нет файлов для удаления":"No files to delete","файл вне выбранной папки":"file is outside the selected folder","Файл не входит в каталог. Обновите список.":"The file is not in the catalog. Refresh the list.","Файл не найден (возможно, диск отключён).":"File not found (the drive may be disconnected).","Файл плеера не найден. Укажите .exe в настройках.":"Player file not found. Choose an .exe in settings.","Не удалось запустить:":"Could not start:","GitHub вернул HTTP":"GitHub returned HTTP","не удалось переместить в Корзину (код":"could not move to the Recycle Bin (code","Корзина доступна только в Windows":"The Recycle Bin is only available on Windows","аниме":"anime","биография":"biography","боевик":"action","вестерн":"western","военный":"war","детектив":"mystery","детский":"kids","для взрослых":"adult","документальный":"documentary","драма":"drama","игра":"game show","история":"history","комедия":"comedy","концерт":"concert","короткометражка":"short","криминал":"crime","мелодрама":"romance","музыка":"music","мультфильм":"animation","мюзикл":"musical","новости":"news","приключения":"adventure","реальное ТВ":"reality TV","семейный":"family","спорт":"sport","ток-шоу":"talk show","триллер":"thriller","ужасы":"horror","фантастика":"sci-fi","фильм-нуар":"film noir","нуар":"noir","фэнтези":"fantasy","церемония":"ceremony","телефильм":"TV movie","мини-сериал":"miniseries","США":"USA","Россия":"Russia","СССР":"USSR","Великобритания":"United Kingdom","Франция":"France","Германия":"Germany","Япония":"Japan","Южная Корея":"South Korea","Китай":"China","Италия":"Italy","Испания":"Spain","Канада":"Canada","Австралия":"Australia","Индия":"India","Швеция":"Sweden","Дания":"Denmark","Норвегия":"Norway","Польша":"Poland","Украина":"Ukraine","Беларусь":"Belarus","Турция":"Turkey","Мексика":"Mexico","Бразилия":"Brazil","Гонконг":"Hong Kong","Ирландия":"Ireland","Нидерланды":"Netherlands","Бельгия":"Belgium","Финляндия":"Finland","Чехия":"Czech Republic","Австрия":"Austria","Швейцария":"Switzerland","Новая Зеландия":"New Zealand","Аргентина":"Argentina","Таиланд":"Thailand","Тайвань":"Taiwan","Грузия":"Georgia","Казахстан":"Kazakhstan","Латвия":"Latvia","Литва":"Lithuania","Эстония":"Estonia","Германия (ФРГ)":"West Germany","ГДР":"East Germany","Югославия":"Yugoslavia","Чехословакия":"Czechoslovakia","Венгрия":"Hungary","Румыния":"Romania","Болгария":"Bulgaria","Сербия":"Serbia","Хорватия":"Croatia","Греция":"Greece","Португалия":"Portugal","Израиль":"Israel","Иран":"Iran","Египет":"Egypt","ЮАР":"South Africa","Куба":"Cuba","Чили":"Chile","Колумбия":"Colombia","Перу":"Peru","Исландия":"Iceland","Люксембург":"Luxembourg","Монако":"Monaco","Мальта":"Malta","Филиппины":"Philippines","Индонезия":"Indonesia","Малайзия":"Malaysia","Сингапур":"Singapore","Вьетнам":"Vietnam","Пакистан":"Pakistan","Армения":"Armenia","Азербайджан":"Azerbaijan","Узбекистан":"Uzbekistan","Молдова":"Moldova","Алжир":"Algeria","Марокко":"Morocco","Тунис":"Tunisia","Нигерия":"Nigeria","Ливан":"Lebanon","Саудовская Аравия":"Saudi Arabia","ОАЭ":"UAE","Катар":"Qatar","Словакия":"Slovakia","Словения":"Slovenia","Босния и Герцеговина":"Bosnia and Herzegovina","Македония":"North Macedonia","Албания":"Albania","Кипр":"Cyprus","Бангладеш":"Bangladesh","Непал":"Nepal","Камбоджа":"Cambodia","Монголия":"Mongolia","Кыргызстан":"Kyrgyzstan","Таджикистан":"Tajikistan","Туркменистан":"Turkmenistan","Эфиопия":"Ethiopia","Кения":"Kenya","Венесуэла":"Venezuela","Уругвай":"Uruguay","Боливия":"Bolivia","Парагвай":"Paraguay","Эквадор":"Ecuador","Пуэрто-Рико":"Puerto Rico","Ямайка":"Jamaica","Доминикана":"Dominican Republic","Лихтенштейн":"Liechtenstein","В выбранных папках нет поддерживаемых видео (mp4, mkv, avi, mov, wmv, flv, webm, m4v, ts, DVD и Blu-ray папки). Семплы и прочие файлы игнорируются.":"No supported videos in the selected folders (mp4, mkv, avi, mov, wmv, flv, webm, m4v, ts, DVD and Blu-ray folders). Samples and other files are ignored.","Источник постеров":"Poster source","Авто (как у найденного фильма)":"Auto (from the matched source)","IMDb":"IMDb","Letterboxd":"Letterboxd","Если у фильма нет постера в выбранном источнике, остаётся постер по умолчанию. Недостающие подгружаются в фоне и запоминаются.":"If a movie has no poster in the selected source, the default poster stays. Missing ones are loaded in the background and remembered.","Источник описания":"Description source","Авто (Кинопоиск для русского, IMDb или Letterboxd для английского)":"Auto (Kinopoisk for Russian, IMDb or Letterboxd for English)","Если в выбранном источнике нет описания, остаётся исходное. Недостающие подгружаются в фоне и запоминаются.":"If the selected source has no description, the original one stays. Missing ones are loaded in the background and remembered.","Рейтинг на карточках":"Rating on cards","Сохранить постер как PNG…":"Save poster as PNG…","Постер сохранён":"Poster saved","Не удалось загрузить постер":"Could not load the poster","Не удалось сохранить постер":"Could not save the poster","Отменить":"Undo","Вырезать":"Cut","Копировать":"Copy","Вставить":"Paste","Выделить всё":"Select all","IMDb или Letterboxd временно ограничили запросы. Всё найденное сохранено, повторите чуть позже. С ключом Кинопоиска такого не бывает.":"IMDb or Letterboxd temporarily limited requests. Everything found is saved, try again a bit later. This does not happen with a Kinopoisk key.","OMDb — данные IMDb через API":"OMDb — IMDb data via API","OMDb API-ключ":"OMDb API key","Получить бесплатный ключ OMDb":"Get a free OMDb key",};
 const CYR=/[А-Яа-яЁё]/;
 let trRe=null, trObs=null, trOrig=new WeakMap(), trDone=new WeakMap(), trAttrOrig=new WeakMap();
 const TR_ATTRS=["title","placeholder","aria-label","alt"];
@@ -5277,6 +5427,7 @@ function applyPrefs(r){ if(r&&r.ok){ pzApply(r.updates); pzFill(); } }
 document.addEventListener("change",e=>{
   const t=e.target; if(!t)return;
   if(t.id==="s-crt"){ saveSet({card_rating:t.value}); renderGrid(); if(S.view==="wl")renderWLGrid(); }
+  if(t.id==="s-auto")saveSet({autostart:t.value});
 });
 
 function rootsHTML(d){
@@ -5294,16 +5445,16 @@ function renderSettings(){
     <div class="st-g">
       <div class="sec-t">Библиотека</div>
       <div class="roots" id="s-roots">${rootsHTML(d)}</div>
-      <div class="row"><button class="btn" data-act="pick-folder">${svg("folder",16)} Добавить папку…</button><span class="hint">Файлы из всех папок собираются в один каталог.</span></div>
+      <div class="row"><button class="btn" data-act="pick-folder">${svg("folder",16)} Добавить папку…</button></div>
     </div>
     <div class="st-g">
       <div class="st-r"><div class="sec-t">Язык</div><select id="s-lang" class="inp"><option value="ru" ${S.lang==="en"?"":"selected"}>Русский</option><option value="en" ${S.lang==="en"?"selected":""}>English</option></select></div>
-      <div class="hint">Язык определяет названия, описания и источник постеров: русский — Кинопоиск, English — OMDb. Постер конкретного фильма можно сменить правой кнопкой мыши по постеру.</div>
     </div>
     <div class="st-g">
       <div class="st-r"><div class="sec-t">Рейтинг на карточках</div><select id="s-crt" class="inp">${[["imdb","IMDb"],["kp","Кинопоиск"],["lb","Letterboxd"]].map(o=>`<option value="${o[0]}" ${(S.settings.card_rating||"imdb")===o[0]?"selected":""}>${o[1]}</option>`).join("")}</select></div>
     </div>
     <div class="st-g">${bgHTML()}</div>
+    <div class="st-g">${startHTML()}</div>
     <div class="st-g">${updHTML()}</div>
     <div class="st-g">${tvHTML()}</div>
     <div class="st-g">
@@ -5319,24 +5470,19 @@ function renderSettings(){
         <div class="hint" style="margin-top:8px">Бесплатный план: до 500 запросов в сутки. Каждый новый фильм — 2 запроса.</div>
       </div>
       <div class="st-k">
-        <div class="st-kh"><div class="st-kt">Резервный источник</div><button class="btn sm" data-act="open-url" data-url="https://www.themoviedb.org/settings/api">Получить ключ TMDB</button></div>
+        <div class="st-kh"><div class="st-kt">Резервный источник</div><button class="btn sm" data-act="open-url" data-url="https://www.themoviedb.org/settings/api">${svg("ext",14)} Получить ключ TMDB</button></div>
         <div class="row"><select id="s-fb" class="inp"><option value="none" ${d.fallback_source==="tmdb"?"":"selected"}>Не использовать</option><option value="tmdb" ${d.fallback_source==="tmdb"?"selected":""}>TMDB (language=ru-RU)</option></select>
         <input type="password" id="s-tmdb" class="inp grow" placeholder="TMDB API-ключ или Read Access Token" value="${esc(d.tmdb_api_key||"")}" autocomplete="off" spellcheck="false"><button class="btn icon" data-act="toggle-key" data-for="s-tmdb" title="Показать/скрыть">${svg("eye",16)}</button></div>
       </div>
       <div class="st-k">
-        <div class="st-kh"><div class="st-kt">OMDb — данные IMDb через API</div><button class="btn sm" data-act="open-url" data-url="https://www.omdbapi.com/apikey.aspx">Получить бесплатный ключ OMDb</button></div>
+        <div class="st-kh"><div class="st-kt">OMDb — данные IMDb через API</div><button class="btn sm" data-act="open-url" data-url="https://www.omdbapi.com/apikey.aspx">${svg("ext",14)} Получить бесплатный ключ OMDb</button></div>
         ${keyRow("s-omdb","OMDb API-ключ",d.omdb_api_key)}
-        <div class="hint" style="margin-top:8px">До 1000 запросов в сутки. Заменяет разбор сайта IMDb: надёжнее и без блокировок.</div>
+        <div class="hint" style="margin-top:8px">Бесплатный план: до 1000 запросов в сутки.</div>
       </div>
       <div class="st-k">
         <div class="st-kh"><div class="st-kt">Letterboxd — ваш вотчлист</div></div>
         <div class="row"><input id="s-lbu" class="inp grow" value="${esc(d.lb_user||"")}" autocomplete="off" spellcheck="false"></div>
-        <div class="hint" style="margin-top:8px">Вотчлист с letterboxd.com/ник/watchlist подгружается во вкладку Watchlist. Он должен быть открыт для всех.</div>
       </div>
-    </div>
-    <div class="st-g">
-      <div class="sec-t">Без API-ключа</div>
-      <label class="radio sw"><input type="checkbox" id="s-web" ${d.web_fallback==="0"?"":"checked"}> Искать через IMDb и Letterboxd, если Кинопоиск не нашёл фильм</label>
     </div>
     <div class="st-g">
       <div class="sec-t">Кэш</div>
@@ -5354,21 +5500,20 @@ async function saveSettings(exit){
   try{
     const pm=document.querySelector("input[name=pm]:checked");
     const d={root_folders:S.draft.root_folders||[],player_mode:pm?pm.value:"system",player_path:S.draft.player_path||"",
-      kp_api_key:$("#s-kp").value.trim(),tmdb_api_key:$("#s-tmdb").value.trim(),omdb_api_key:$("#s-omdb").value.trim(),lb_user:$("#s-lbu").value.trim(),fallback_source:$("#s-fb").value,
-      web_fallback:$("#s-web").checked?"1":"0"};
+      kp_api_key:$("#s-kp").value.trim(),tmdb_api_key:$("#s-tmdb").value.trim(),omdb_api_key:$("#s-omdb").value.trim(),lb_user:$("#s-lbu").value.trim(),fallback_source:$("#s-fb").value};
     if(d.player_mode==="custom"&&!d.player_path){
       if(!exit){ toast("Укажите .exe файл плеера или выберите системный","err"); return; }
       d.player_mode="system";
     }
     const prev=S.settings;
-    const def={root_folders:[],player_mode:"system",player_path:"",kp_api_key:"",tmdb_api_key:"",omdb_api_key:"",lb_user:"",fallback_source:"none",web_fallback:"1"};
+    const def={root_folders:[],player_mode:"system",player_path:"",kp_api_key:"",tmdb_api_key:"",omdb_api_key:"",lb_user:"",fallback_source:"none"};
     const changed=Object.keys(d).some(k=>JSON.stringify(d[k])!==JSON.stringify(prev[k]==null||prev[k]===""?def[k]:prev[k]));
     if(exit&&!changed){ closeModal(); return; }
     let r;
     try{ r=await api("save_settings",d); }catch(e){ r=null; }
     if(!r||!r.ok){ toast("Не удалось сохранить настройки","err"); if(exit)closeModal(); return; }
     S.settings=r.settings; closeModal();
-    const keys=prev.kp_api_key!==d.kp_api_key||prev.tmdb_api_key!==d.tmdb_api_key||prev.omdb_api_key!==d.omdb_api_key||prev.fallback_source!==d.fallback_source||prev.web_fallback!==d.web_fallback;
+    const keys=prev.kp_api_key!==d.kp_api_key||prev.tmdb_api_key!==d.tmdb_api_key||prev.omdb_api_key!==d.omdb_api_key||prev.fallback_source!==d.fallback_source;
     toast("Настройки сохранены");
     if(prev.lb_user!==S.settings.lb_user){ S.lbProf=null; renderLbBox(); if(S.settings.lb_user)wlSync(false); }
     if(JSON.stringify(S.settings.root_folders||[])!==JSON.stringify(prev.root_folders||[])){ await loadLibrary(false); }
@@ -5422,6 +5567,7 @@ document.addEventListener("click",async e=>{
     case "lb-sync": wlSync(false); break;
     case "w-lang": welcomeLang(t.dataset.v); break;
     case "w-start": welcomeStart(); break;
+    case "copy-text": copyText(t.dataset.v); break;
     case "tv-pin": tvAct("srv_new_pin"); break;
     case "tv-forget": tvAct("srv_forget"); break;
     case "ctx-pin": case "ctx-unpin": { const c=S.ctx; hideMenu(); if(c)setPin(c,act==="ctx-pin"); break; }
@@ -5445,9 +5591,9 @@ document.addEventListener("click",async e=>{
     case "remote-go": remoteGo(); break;
     case "remote-last": remoteLast(); break;
     case "remote-off": remoteOff(); break;
-    case "rp-vlc": if(await playerSet("exe",RM.askVlc)){ closeDlg(); play(RM.askPath); } break;
-    case "rp-exe": { const x=await api("pick_player"); if(x&&x.path&&await playerSet("exe",x.path)){ closeDlg(); if(RM.askPath)play(RM.askPath); else openRemote(); } break; }
-    case "rp-browser": if(await playerSet("browser")){ closeDlg(); play(RM.askPath); } break;
+    case "rp-use": { const x=(RM.askPl||[])[Number(t.dataset.i)]; if(x)rpChoose("exe",x.path); break; }
+    case "rp-exe": { const x=await api("pick_player"); if(x&&x.path)rpChoose("exe",x.path); break; }
+    case "rp-browser": rpChoose("browser"); break;
     case "rp-reset": if(await playerSet("reset")){ RM.askPath=null; renderRemote(); } break;
     case "retry": S.problem=null; renderBanner(); queueMissing(false); break;
     case "folder": pickFolderTop(); break;
@@ -6204,6 +6350,8 @@ def _single_instance():
         wait = 8000 if "--after-update" in sys.argv else 0
         if k32.WaitForSingleObject(ctypes.c_void_p(h), wait) in (0, 0x80):
             return True
+        if "--minimized" in sys.argv:
+            return False
         w = _kino_hwnd(False)
         if not w:
             return True
@@ -6215,7 +6363,7 @@ def _single_instance():
         return True
 
 
-def _style_window():
+def _style_window(show=True):
     try:
         import ctypes
         time.sleep(0.4)
@@ -6223,10 +6371,11 @@ def _style_window():
         if not hwnd:
             return
         u32 = ctypes.windll.user32
-        if u32.IsIconic(hwnd):
-            u32.ShowWindow(hwnd, 9)
-        u32.ShowWindow(hwnd, 5)
-        u32.SetForegroundWindow(hwnd)
+        if show:
+            if u32.IsIconic(hwnd):
+                u32.ShowWindow(hwnd, 9)
+            u32.ShowWindow(hwnd, 5)
+            u32.SetForegroundWindow(hwnd)
         ico = os.path.join(getattr(sys, "_MEIPASS", os.environ.get("KINO_RT") or os.path.dirname(os.path.abspath(__file__))), "icon.ico")
         if os.path.isfile(ico):
             u32.LoadImageW.restype = ctypes.c_void_p
@@ -7026,6 +7175,19 @@ class _Tray:
         return not self.hide()
 
 
+def _startup(tray, minimized):
+    if not minimized:
+        _style_window()
+        return
+    _style_window(False)
+    for _ in range(40):
+        if tray.ready:
+            break
+        time.sleep(0.5)
+    if not (tray.ready and tray.hide()):
+        tray._show()
+
+
 def main():
     global webview
     import webview as _wv
@@ -7043,7 +7205,9 @@ def main():
     if not _single_instance():
         return
     api = Api()
+    threading.Thread(target=api._autostart_apply, daemon=True).start()
     threading.Thread(target=api._ensure_shortcut, daemon=True).start()
+    minimized = "--minimized" in sys.argv
     api._srv_apply()
     ww, wh, wx, wy = 1400, 880, None, None
     try:
@@ -7058,7 +7222,7 @@ def main():
     except Exception:
         pass
     window = webview.create_window(
-        WINDOW_TITLE, html=HTML, js_api=api, x=wx, y=wy,
+        WINDOW_TITLE, html=HTML, js_api=api, x=wx, y=wy, hidden=minimized,
         width=ww, height=wh, min_size=(1000, 640), background_color="#070707",
     )
     api._window = window
@@ -7068,7 +7232,7 @@ def main():
     except Exception as e:
         _log("tray hook: %s" % e)
     try:
-        webview.start(_style_window, gui="edgechromium")
+        webview.start(_startup, (tray, minimized), gui="edgechromium")
         api._flush_cache()
     except Exception as e:
         _log("start error: %s\n%s" % (e, traceback.format_exc()))
