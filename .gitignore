@@ -1,0 +1,27 @@
+# локальные данные программы (в config.json лежит ключ API!)
+config.json
+metadata_cache.json
+watched.json
+watchlist.json
+palettes.json
+poster_cache/
+background.jpg
+kino.log
+kino-error.log
+# сборка
+venv/
+build/
+dist/
+*.spec
+kino.exe
+__pycache__/
+launcher/payload.zip
+launcher/payload.ver
+launcher/*.syso
+rt/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+progress.json
+

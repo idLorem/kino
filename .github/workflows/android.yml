@@ -1,0 +1,33 @@
+name: android
+on:
+  push:
+    branches: [tv, main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Signing key
+        env:
+          KS: ${{ secrets.KINO_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/kino.keystore"
+            echo "KINO_KS=$RUNNER_TEMP/kino.keystore" >> "$GITHUB_ENV"
+          fi
+      - run: gradle -p android assembleDebug --no-daemon -PverCode=$((100 + ${{ github.run_number }}))
+        env:
+          KINO_KS_PASS: ${{ secrets.KINO_KS_PASS }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kino-tv-debug
+          path: android/app/build/outputs/apk/debug/*.apk

@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Signing key
+        env:
+          KS: ${{ secrets.KINO_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            echo "$KS" | base64 -d > "$RUNNER_TEMP/kino.keystore"
+            echo "KINO_KS=$RUNNER_TEMP/kino.keystore" >> "$GITHUB_ENV"
+          fi
+      - run: gradle -p android assembleDebug --no-daemon -PverName=${GITHUB_REF_NAME#v} -PverCode=$((100 + ${{ github.run_number }}))
+        env:
+          KINO_KS_PASS: ${{ secrets.KINO_KS_PASS }}
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk kino.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kino-apk
+          path: kino.apk
+
+  build:
+    needs: apk
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version matches tag
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path main.py -Pattern '^APP_VERSION = "(.+)"').Matches[0].Groups[1].Value
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          if ($v -ne $tag) { Write-Error "APP_VERSION ($v) does not match tag ($tag)"; exit 1 }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Prepare Python runtime
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          robocopy "$env:pythonLocation" rt /E /XD __pycache__ test tests idlelib turtledemo Doc include libs tcl Scripts /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          $global:LASTEXITCODE = 0
+          Copy-Item main.py rt\main.py
+          Copy-Item icon.ico rt\icon.ico
+          rt\python.exe -I -c "import webview, requests, bs4, clr_loader, pystray, PIL; print('imports ok')"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          rt\python.exe -m py_compile main.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Build installer.exe
+        shell: pwsh
+        run: |
+          python build_payload.py rt launcher/payload.zip launcher/payload.ver
+          python mksyso.py icon.ico launcher/rsrc_windows_amd64.syso
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Push-Location launcher
+          $env:CGO_ENABLED = "0"
+          go build -trimpath -ldflags "-H=windowsgui" -o ../dist/installer.exe .
+          Pop-Location
+          if (-not (Test-Path dist/installer.exe)) { exit 1 }
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kino-apk
+          path: dist
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/installer.exe
+            dist/kino.apk
+            main.py
+          body: final
+          generate_release_notes: false
