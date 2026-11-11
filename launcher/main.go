@@ -240,15 +240,19 @@ func main() {
 		}
 	}
 
+	sp := startSplash()
 	ch, ok := start()
 	if !ok {
+		sp.close()
 		return
 	}
+	var e error
 	select {
-	case e := <-ch:
-		if e != nil {
-			fail()
-		}
+	case e = <-ch:
 	case <-time.After(15 * time.Second):
+	}
+	sp.close()
+	if e != nil {
+		fail()
 	}
 }

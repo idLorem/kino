@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -3640,7 +3640,7 @@ class Api:
             exe = sys.executable
             if os.name == "nt" and exe.lower().endswith("python.exe") and os.path.isfile(exe[:-10] + "pythonw.exe"):
                 exe = exe[:-10] + "pythonw.exe"
-            self._spawn_detached([exe, target])
+            self._spawn_detached([exe, target, "--after-update"])
         else:
             data = self._download_release_asset(assets.get("installer.exe") or assets.get("kino.exe"), 400 * 1024 * 1024)
             if data[:2] != b"MZ" or len(data) < 1024 * 1024:
@@ -4086,6 +4086,10 @@ select.inp option{background:#141414;color:#f2f2f2}
 #top{position:absolute;left:0;right:0;top:0;margin:16px 20px 0;padding:12px 16px;border-radius:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;z-index:5}
 #top .inp,#top .btn:not(.icon){height:40px;padding-top:0;padding-bottom:0}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:.5px;margin-right:8px;white-space:nowrap}
+#splash{position:fixed;inset:0;z-index:9999;background:#070707;display:grid;place-items:center;transition:opacity .45s cubic-bezier(.22,1,.36,1)}
+#splash img{width:180px;height:auto;pointer-events:none}
+#splash.out{opacity:0;pointer-events:none}
+@media (prefers-reduced-motion:reduce){#splash{transition:none}}
 .brand img{height:40px;width:auto;display:block;pointer-events:none;user-select:none;-webkit-user-drag:none}
 .search{position:relative;flex:1 1 150px;min-width:130px;max-width:360px}
 .search svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);opacity:.55;pointer-events:none}
@@ -4429,6 +4433,7 @@ body.is-welcome:not(.v-wl) #top .search,body.is-welcome:not(.v-wl) #typeSel,body
 </style>
 </head>
 <body>
+<div id="splash"><img alt=""></div>
 <div id="updBar" class="glass"></div><div id="base"></div><div id="userbg"></div><div id="bgA"></div><div id="bgB"></div><div id="shade"></div>
 
 <div id="app">
@@ -6133,6 +6138,9 @@ $("#zoom").addEventListener("dblclick",()=>saveZoom(applyZoom(176)));
 document.querySelectorAll("[data-ico]").forEach(el=>{ el.innerHTML=svg(el.dataset.ico); el.style.display="inline-flex"; });
 document.querySelectorAll(".sx").forEach(b=>{ if(!b.innerHTML)b.innerHTML=svg("close",14); });
 let booted=false;
+const splashT0=Date.now();
+function splashOut(){ const s=$("#splash"); if(!s||s.classList.contains("out"))return; setTimeout(()=>{ s.classList.add("out"); setTimeout(()=>s.remove(),600); },Math.max(0,900-(Date.now()-splashT0))); }
+(function(){ const s=$("#splash"), l=document.querySelector(".brand img"); if(s&&l)s.querySelector("img").src=l.src; setTimeout(splashOut,4000); })();
 async function boot(){
   if(booted)return; booted=true;
   try{ S.settings=await api("get_settings"); }catch(e){ S.settings={}; }
@@ -6147,6 +6155,7 @@ async function boot(){
   loadWL().then(()=>{ if(S.wl.items.some(x=>x.meta&&x.meta.lb_pending))wlLbFill(); });
   if(S.settings.lb_user)setTimeout(()=>wlSync(true),6000);
   if(hasRoots())await loadLibrary(false);
+  splashOut();
   pzFill();
   if((S.settings.auto_update||"1")!=="0")setTimeout(()=>checkUpdate(false),3500);
 }
@@ -6169,11 +6178,48 @@ setTimeout(()=>{ if(!booted){ $("#grid").classList.add("hidden"); const em=$("#e
 '''
 
 
+def _kino_hwnd(own):
+    import ctypes
+    u32 = ctypes.windll.user32
+    buf = ctypes.create_unicode_buffer(64)
+    pid = ctypes.c_ulong()
+    h = 0
+    while True:
+        h = u32.FindWindowExW(None, h, None, WINDOW_TITLE)
+        if not h:
+            return 0
+        u32.GetClassNameW(h, buf, 64)
+        u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        if buf.value.startswith("WindowsForms") and (pid.value == os.getpid()) == own:
+            return h
+
+
+def _single_instance():
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.CreateMutexW.restype = ctypes.c_void_p
+        name = "Kino.single." + hashlib.md5(os.path.normcase(APP_DIR).encode("utf-8")).hexdigest()
+        h = k32.CreateMutexW(None, False, name)
+        wait = 8000 if "--after-update" in sys.argv else 0
+        if k32.WaitForSingleObject(ctypes.c_void_p(h), wait) in (0, 0x80):
+            return True
+        w = _kino_hwnd(False)
+        if not w:
+            return True
+        u32 = ctypes.windll.user32
+        u32.ShowWindow(w, 9 if u32.IsIconic(w) else 5)
+        u32.SetForegroundWindow(w)
+        return False
+    except Exception:
+        return True
+
+
 def _style_window():
     try:
         import ctypes
         time.sleep(0.4)
-        hwnd = ctypes.windll.user32.FindWindowW(None, WINDOW_TITLE)
+        hwnd = _kino_hwnd(True)
         if not hwnd:
             return
         u32 = ctypes.windll.user32
@@ -6994,12 +7040,26 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Kino.catalog.app")
     except Exception:
         pass
+    if not _single_instance():
+        return
     api = Api()
     threading.Thread(target=api._ensure_shortcut, daemon=True).start()
     api._srv_apply()
+    ww, wh, wx, wy = 1400, 880, None, None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        rc = wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rc), 0)
+        sc = (ctypes.windll.user32.GetDpiForSystem() or 96) / 96.0
+        aw, ah = (rc.right - rc.left) / sc, (rc.bottom - rc.top) / sc
+        ww, wh = int(min(ww, aw)), int(min(wh, ah))
+        wx, wy = int(rc.left / sc + (aw - ww) / 2), int(rc.top / sc + (ah - wh) / 2)
+    except Exception:
+        pass
     window = webview.create_window(
-        WINDOW_TITLE, html=HTML, js_api=api,
-        width=1400, height=880, min_size=(1000, 640), background_color="#070707",
+        WINDOW_TITLE, html=HTML, js_api=api, x=wx, y=wy,
+        width=ww, height=wh, min_size=(1000, 640), background_color="#070707",
     )
     api._window = window
     tray = _Tray(api, window)
