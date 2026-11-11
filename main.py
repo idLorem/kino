@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -80,7 +80,6 @@ DEFAULT_CONFIG = {
     "lb_user": "",
     "fallback_source": "none",
     "web_fallback": "1",
-    "lb_enrich": "1",
     "bg_mode": "default",
     "bg_color": "#0a0a0a",
     "bg_dim": "55",
@@ -1041,9 +1040,9 @@ def pick_best(cands, title, alts, year, kind):
             d = abs(year - cy)
             if d > 1 and sim < 0.9:
                 continue
+            score += 0.3 if d == 0 else (0.12 if d == 1 else -0.25)
         elif year and not cy and sim < 0.9:
             continue
-            score += 0.3 if d == 0 else (0.12 if d == 1 else -0.25)
         if c.get("type") == kind:
             score += 0.1
         if best_key is None or score > best_key[0]:
@@ -1193,7 +1192,7 @@ class Api:
             snap = dict(self._prog)
             if done:
                 self._cfg["watched"][paths[fid]] = 1
-        _save_json(PROGRESS_PATH, snap)
+            _save_json(PROGRESS_PATH, snap)
         if done:
             self._save_cfg()
             w = self._cfg["watched"]
@@ -1208,7 +1207,7 @@ class Api:
             for k in [k for k in self._prog if k.startswith(pre)]:
                 del self._prog[k]
             snap = dict(self._prog)
-        _save_json(PROGRESS_PATH, snap)
+            _save_json(PROGRESS_PATH, snap)
         return {"ok": True}
 
     @safe
@@ -1323,23 +1322,6 @@ class Api:
         mine = _local_ip()
         out = [{"host": h, "port": p, "name": n, "self": h in (mine, "127.0.0.1")} for (h, p), n in found.items()]
         return {"ok": True, "servers": out}
-
-    @safe
-    def remote_probe(self, host, port=8765):
-        host, port = self._rem_norm(host, port)
-        if not host:
-            return {"ok": False, "error": "Укажите адрес"}
-        sess = requests.Session()
-        sess.trust_env = False
-        try:
-            r = sess.get("http://%s:%d/api/ping" % (host, port), timeout=6)
-            d = r.json()
-        except (requests.exceptions.RequestException, ValueError):
-            return {"ok": False, "error": "Нет ответа. Проверьте адрес, порт и что сервер включён на том компьютере."}
-        if d.get("app") != "kino":
-            return {"ok": False, "error": "По этому адресу не Kino"}
-        return {"ok": True, "name": d.get("name") or host, "pin": bool(d.get("pin", True)), "version": d.get("version"),
-                "host": host, "port": port}
 
     @safe
     def remote_connect(self, host, port=8765, pin=""):
@@ -1564,7 +1546,19 @@ class Api:
 
     def _save_cache(self):
         with self._lock:
-            _save_json(CACHE_PATH, self._cache)
+            self._cache_dirty = True
+            if getattr(self, "_cache_timer", None):
+                return
+            self._cache_timer = threading.Timer(3, self._flush_cache)
+            self._cache_timer.daemon = True
+            self._cache_timer.start()
+
+    def _flush_cache(self):
+        with self._lock:
+            self._cache_timer = None
+            if getattr(self, "_cache_dirty", False):
+                self._cache_dirty = False
+                _save_json(CACHE_PATH, self._cache)
 
     def _dialog(self, kind, **kw):
         FD = getattr(webview, "FileDialog", None)
@@ -2122,25 +2116,6 @@ class Api:
                 return kp
         return self._lb_to_meta(lb)
 
-    def _step_letterboxd(self, queries, it):
-        if it["kind"] != "movie":
-            return None
-        year = it["year"]
-        for q in queries[:2]:
-            for c in self._lb_search(q)[:3]:
-                if year and c.get("year") and abs(year - c["year"]) > 1:
-                    continue
-                try:
-                    lb = self._lb_film(c["slug"])
-                except ApiError as e:
-                    if e.code == "notfound":
-                        continue
-                    raise
-                if year and lb.get("year") and abs(year - lb["year"]) > 1:
-                    continue
-                return self._lb_finish(lb)
-        return None
-
     def _finalize(self, meta, it):
         iid = meta.get("imdbId")
         if iid and not meta.get("urlImdb"):
@@ -2318,7 +2293,7 @@ class Api:
     def save_settings(self, data):
         allowed = {"player_mode", "player_path", "kp_api_key", "tmdb_api_key", "omdb_api_key", "lb_user", "fallback_source", "poster_size",
                    "bg_mode", "bg_color", "bg_dim", "bg_blur", "auto_update", "lang", "lang_set", "card_rating", "sort"}
-        flags = {"web_fallback", "lb_enrich", "tray_close"}
+        flags = {"web_fallback", "tray_close"}
         prev_key = self._cfg["kp_api_key"]
         if isinstance((data or {}).get("root_folders"), list):
             self._cfg["root_folders"] = self._norm_roots(data["root_folders"])
@@ -2496,10 +2471,8 @@ class Api:
         except Exception as e:
             _log("resolve error: %s\n%s" % (e, traceback.format_exc()))
             status, meta, extra = "error", None, {}
-        if stale and status == "ok" and cached.get("source") == "kp" and meta.get("source") != "kp":
-            return {"ok": True, "status": "ok", "item": self._view(it)}
-        if stale and status != "ok":
-            if status == "notfound":
+        if stale and (status != "ok" or (cached.get("source") == "kp" and meta.get("source") != "kp")):
+            if status in ("ok", "notfound"):
                 with self._lock:
                     cached["mv"] = MATCH_V
                     self._save_cache()
@@ -3611,6 +3584,7 @@ class Api:
                 "mode": mode, "canInstall": can}
 
     def _exit_soon(self):
+        self._flush_cache()
         threading.Timer(0.9, lambda: os._exit(0)).start()
 
     def _spawn_detached(self, args):
@@ -4265,7 +4239,7 @@ body:not(.v-wl) .wlonly{display:none}
 .lb-row{display:flex;gap:10px;align-items:center}
 .lb-l{font-size:12px;color:var(--muted);white-space:nowrap}
 .lb-row .inp{flex:1;min-width:0;width:200px}
-.lb-card{display:flex;align-items:center;gap:12px;padding:6px 6px 6px 8px;border-radius:14px;background:rgba(20,20,22,.92);border:1px solid rgba(255,255,255,.08);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.lb-card{display:flex;align-items:center;gap:12px;padding:6px 6px 6px 8px;border-radius:14px;color:var(--text);background:rgba(20,20,22,.62);-webkit-backdrop-filter:blur(24px) saturate(1.5);backdrop-filter:blur(24px) saturate(1.5);box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 12px 32px rgba(0,0,0,.35)}
 .lb-card .btn.icon{width:36px;height:36px}
 .lb-av{width:36px;height:36px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,.1);flex:none;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;overflow:hidden}
 .lb-av img{width:100%;height:100%;object-fit:cover;display:block}
@@ -6629,7 +6603,7 @@ class TvServer:
 
             def _body(self):
                 n = int(self.headers.get("Content-Length") or 0)
-                if n > 8192:
+                if n < 0 or n > 8192:
                     return None
                 try:
                     return json.loads(self.rfile.read(n) or b"{}")
@@ -7035,6 +7009,7 @@ def main():
         _log("tray hook: %s" % e)
     try:
         webview.start(_style_window, gui="edgechromium")
+        api._flush_cache()
     except Exception as e:
         _log("start error: %s\n%s" % (e, traceback.format_exc()))
         try:
