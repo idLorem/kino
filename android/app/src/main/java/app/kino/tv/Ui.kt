@@ -223,8 +223,6 @@ fun PosterCard(item: Item, conn: Conn, onClick: () -> Unit, modifier: Modifier =
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
-            .zIndex(if (focused) 1f else 0f)
-            .scale(if (focused) 1.05f else 1f)
             .clip(shape)
             .border(if (focused) 3.dp else 1.dp, if (focused) C.text else Color(0x21FFFFFF), shape)
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)

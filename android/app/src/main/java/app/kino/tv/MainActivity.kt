@@ -153,7 +153,7 @@ fun KinoApp() {
                 val saved = Prefs.str(ctx, "lang", "")
                 L.ru = if (saved.isNotEmpty()) saved == "ru" else lib.optString("lang", "ru") != "en"
                 library = parseItems(lib.optJSONArray("items"), false)
-                ghosts = parseItems(lib.optJSONArray("ghosts"), false)
+                ghosts = emptyList()
             } catch (e: HttpFail) {
                 if (e.code == 401) {
                     if (my == loadSeq[0]) disconnect()

@@ -73,6 +73,17 @@ jobs:
           rt\python.exe -m py_compile main.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: Build VPN helper
+        shell: pwsh
+        run: |
+          Push-Location vpn
+          $env:CGO_ENABLED = "0"
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          go build -trimpath -ldflags "-s -w" -o ../rt/kino-vpn.exe .
+          Pop-Location
+          if (-not (Test-Path rt/kino-vpn.exe)) { exit 1 }
+
       - name: Build installer.exe
         shell: pwsh
         run: |

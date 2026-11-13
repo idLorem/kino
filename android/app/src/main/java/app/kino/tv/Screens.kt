@@ -302,7 +302,7 @@ fun HomeScreen(
                 Text(t.title, color = C.text, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2)
                 Text(tr("Убрать из «Продолжить просмотр»?", "Remove from “Continue watching”?"), color = C.muted, fontSize = 14.sp)
                 Pill(tr("Убрать", "Remove"), onClick = {
-                    Net.postAsync(conn, "/api/progress/clear", org.json.JSONObject().put("id", t.id))
+                    Marks.clearProgress(t.id)
                     dismissed = dismissed + t.id
                     clearTarget = null
                 }, modifier = Modifier.fillMaxWidth())
@@ -407,15 +407,10 @@ fun DetailScreen(
         try { fr.requestFocus() } catch (_: Exception) { }
     }
 
-    fun act(path: String, body: JSONObject, apply: (Item) -> Item) {
-        scope.launch {
-            try {
-                Net.post(conn, path, body)
-                cur = apply(cur)
-                onChanged()
-            } catch (_: Exception) {
-            }
-        }
+    fun act(local: () -> Unit, apply: (Item) -> Item) {
+        local()
+        cur = apply(cur)
+        onChanged()
     }
 
     val actions: @Composable () -> Unit = {
@@ -436,7 +431,7 @@ fun DetailScreen(
                 if (!cur.isWatchlist && !ghost) {
                     Pill(
                         if (cur.inWatched) tr("Не просмотрено", "Unwatched") else tr("Просмотрено", "Watched"),
-                        onClick = { act("/api/watched", JSONObject().put("id", cur.id).put("flag", !cur.inWatched)) { it.copy(inWatched = !it.inWatched) } },
+                        onClick = { act({ Marks.setWatched(cur.id, !cur.inWatched) }) { it.copy(inWatched = !it.inWatched) } },
                         modifier = Modifier.width(bw),
                     )
                 }
@@ -446,7 +441,7 @@ fun DetailScreen(
                     if (cur.pinned > 0) tr("Открепить", "Unpin") else tr("Закрепить", "Pin"),
                     onClick = {
                         val now = cur.pinned <= 0
-                        act("/api/pin", JSONObject().put("ref", cur.id).put("flag", now)) { it.copy(pinned = if (now) System.currentTimeMillis() / 1000.0 else 0.0) }
+                        act({ Marks.setPinned(cur.id, if (now) System.currentTimeMillis() / 1000.0 else 0.0) }) { it.copy(pinned = if (now) System.currentTimeMillis() / 1000.0 else 0.0) }
                     },
                     modifier = Modifier.width(bw),
                     focusRequester = if (cur.files.isEmpty()) fr else null,
@@ -454,7 +449,7 @@ fun DetailScreen(
                 if (!cur.isWatchlist && !ghost) {
                     Pill(
                         if (cur.hidden) tr("Вернуть", "Unhide") else tr("Скрыть", "Hide"),
-                        onClick = { act("/api/hidden", JSONObject().put("id", cur.id).put("flag", !cur.hidden)) { it.copy(hidden = !it.hidden) } },
+                        onClick = { act({ Marks.setHidden(cur.id, !cur.hidden) }) { it.copy(hidden = !it.hidden) } },
                         modifier = Modifier.width(bw),
                     )
                 }
@@ -462,7 +457,7 @@ fun DetailScreen(
             if (cur.resumeFid >= 0 && !ghost) {
                 Pill(
                     tr("Убрать из «Продолжить»", "Remove from Continue"),
-                    onClick = { act("/api/progress/clear", JSONObject().put("id", cur.id)) { it.copy(resumeFid = -1, resumePos = 0, resumeDur = 0, files = it.files.map { f -> f.copy(pos = 0, dur = 0) }) } },
+                    onClick = { act({ Marks.clearProgress(cur.id) }) { it.copy(resumeFid = -1, resumePos = 0, resumeDur = 0, files = it.files.map { f -> f.copy(pos = 0, dur = 0) }) } },
                     modifier = Modifier.width(bw * 2 + 12.dp),
                 )
             }

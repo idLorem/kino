@@ -192,7 +192,7 @@ fun parseItems(arr: JSONArray?, watchlist: Boolean): List<Item> {
     for (i in 0 until arr.length()) {
         val o = arr.getJSONObject(i)
         try {
-            out.add(if (watchlist) parseWatchlistItem(o) else parseLibraryItem(o))
+            out.add(Marks.apply(if (watchlist) parseWatchlistItem(o) else parseLibraryItem(o)))
         } catch (_: Exception) {
         }
     }

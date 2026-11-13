@@ -271,9 +271,7 @@ fun PlayerScreen(
     }
 
     fun reportProgress(p: Long, d: Long) {
-        if (d > 0) {
-            Net.postAsync(conn, "/api/progress", JSONObject().put("id", item.id).put("fid", file.fid).put("pos", p).put("dur", d))
-        }
+        Marks.progress(item, file.fid, p, d)
     }
 
     fun leave() {
