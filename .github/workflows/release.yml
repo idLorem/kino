@@ -90,6 +90,12 @@ jobs:
           name: kino-apk
           path: dist
 
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $out = foreach ($f in 'dist/installer.exe', 'main.py') { "{0}  {1}" -f (Get-FileHash $f -Algorithm SHA256).Hash.ToLower(), (Split-Path $f -Leaf) }
+          Set-Content -Path SHA256SUMS -Value $out -Encoding ascii
+
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -97,5 +103,6 @@ jobs:
             dist/installer.exe
             dist/kino.apk
             main.py
+            SHA256SUMS
           body: final
           generate_release_notes: false

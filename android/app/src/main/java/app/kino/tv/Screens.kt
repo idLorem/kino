@@ -399,7 +399,7 @@ fun DetailScreen(
 ) {
     BackHandler { onBack() }
     val scope = rememberCoroutineScope()
-    var cur by remember(item.id) { mutableStateOf(item) }
+    var cur by remember(item) { mutableStateOf(item) }
     val ghost = cur.files.isEmpty() && !cur.isWatchlist
     val fr = remember { androidx.compose.ui.focus.FocusRequester() }
     val cp = compact()

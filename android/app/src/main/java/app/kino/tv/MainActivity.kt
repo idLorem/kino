@@ -30,7 +30,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         if (Build.VERSION.SDK_INT >= 28) {
             window.attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -92,6 +91,8 @@ fun KinoApp() {
     val gridWa = rememberLazyGridState()
     val gridHi = rememberLazyGridState()
 
+    val loadSeq = remember { intArrayOf(0) }
+
     fun checkUpdate(manual: Boolean) {
         scope.launch {
             if (manual) updStatus = tr("Проверяю…", "Checking…")
@@ -106,7 +107,7 @@ fun KinoApp() {
         val r = update ?: return
         val ready = updFile
         if (ready != null && ready.isFile) {
-            Updater.install(ctx, ready)
+            if (!Updater.install(ctx, ready)) updStatus = tr("Не удалось открыть установщик", "Couldn't open the installer")
             return
         }
         scope.launch {
@@ -114,9 +115,11 @@ fun KinoApp() {
             try {
                 updFile = Updater.download(ctx, r.version, r.url) { updProgress = it }
                 updProgress = -1
+                updStatus = ""
             } catch (_: Exception) {
                 updProgress = -1
-                error = tr("Не удалось скачать обновление", "Couldn't download the update")
+                updStatus = tr("Не удалось скачать обновление", "Couldn't download the update")
+                error = updStatus
             }
         }
     }
@@ -125,26 +128,40 @@ fun KinoApp() {
         if (Prefs.str(ctx, "upd", "1") == "1") checkUpdate(false)
     }
 
+    fun disconnect() {
+        loadSeq[0]++
+        Prefs.clear(ctx)
+        conn = null
+        library = emptyList()
+        ghosts = emptyList()
+        selectedId = null
+        playing = null
+        settings = false
+        lastFocus = null
+        error = ""
+    }
+
     fun load(refresh: Boolean) {
         val c = conn ?: return
+        val my = ++loadSeq[0]
         scope.launch {
             loading = true
             error = ""
             try {
                 val lib = if (refresh) Net.post(c, "/api/refresh", JSONObject()) else Net.get(c, "/api/library")
+                if (my != loadSeq[0]) return@launch
                 val saved = Prefs.str(ctx, "lang", "")
                 L.ru = if (saved.isNotEmpty()) saved == "ru" else lib.optString("lang", "ru") != "en"
                 library = parseItems(lib.optJSONArray("items"), false)
                 ghosts = parseItems(lib.optJSONArray("ghosts"), false)
             } catch (e: HttpFail) {
                 if (e.code == 401) {
-                    Prefs.clear(ctx)
-                    conn = null
-                } else error = tr("Ошибка сервера", "Server error")
+                    if (my == loadSeq[0]) disconnect()
+                } else if (my == loadSeq[0]) error = tr("Ошибка сервера", "Server error")
             } catch (_: Exception) {
-                error = tr("Нет связи с компьютером", "Can't reach the PC")
+                if (my == loadSeq[0]) error = tr("Нет связи с компьютером", "Can't reach the PC")
             }
-            loading = false
+            if (my == loadSeq[0]) loading = false
         }
     }
 
@@ -171,7 +188,7 @@ fun KinoApp() {
                 onExit = {
                     playing = null
                     scope.launch {
-                        kotlinx.coroutines.delay(700)
+                        Net.flush()
                         load(false)
                     }
                 },
@@ -189,7 +206,7 @@ fun KinoApp() {
                 Prefs.setStr(ctx, "lang", if (L.ru) "ru" else "en")
                 load(false)
             },
-            onDisconnect = { Prefs.clear(ctx); settings = false; conn = null },
+            onDisconnect = { disconnect() },
             update = update,
             updStatus = updStatus,
             updProgress = updProgress,

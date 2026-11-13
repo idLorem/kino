@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,7 +52,6 @@ object C {
     val muted = Color(0x85F2F2F2)
     val stroke = Color(0x1AFFFFFF)
     val glass = Color(0x0FFFFFFF)
-    val glassHi = Color(0x1AFFFFFF)
     val good = Color(0xFF9AD4AE)
     val mid = Color(0xFFC9C9C9)
     val bad = Color(0xFFE29A9A)
@@ -186,17 +186,21 @@ fun Chip(text: String, color: Color = C.text, modifier: Modifier = Modifier) {
 @Composable
 fun PosterImage(item: Item, conn: Conn, modifier: Modifier = Modifier) {
     val p = item.poster
-    val url = when {
-        p != null && p.startsWith("http") -> p
-        item.localPoster -> conn.posterUrl(item.id)
-        else -> null
-    }
+    val remote = p?.takeIf { it.startsWith("http") }
+    val urls = listOfNotNull(
+        remote?.let { conn.imgUrl(it) },
+        conn.posterUrl(item.id),
+        remote,
+    )
+    var idx by remember(item.id, p) { mutableStateOf(0) }
+    val url = urls.getOrNull(idx)
     Box(modifier.background(Color(0xFF111111))) {
         if (url != null) {
             AsyncImage(
                 model = url,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                onError = { idx++ },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -219,6 +223,7 @@ fun PosterCard(item: Item, conn: Conn, onClick: () -> Unit, modifier: Modifier =
     val shape = RoundedCornerShape(16.dp)
     Box(
         modifier
+            .zIndex(if (focused) 1f else 0f)
             .scale(if (focused) 1.05f else 1f)
             .clip(shape)
             .border(if (focused) 3.dp else 1.dp, if (focused) C.text else Color(0x21FFFFFF), shape)
@@ -290,7 +295,7 @@ fun BackPill(onBack: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun compact(): Boolean = LocalConfiguration.current.screenWidthDp < 700
+fun compact(): Boolean = LocalConfiguration.current.let { it.screenWidthDp < 700 || it.screenHeightDp < 480 }
 
 val SUB_SIZES = listOf("s", "m", "l")
 val SUB_POS = listOf("0", "1", "2", "3")

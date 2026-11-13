@@ -121,7 +121,9 @@ private fun playFiles(o: JSONObject): List<PlayFile> {
                 val e = eps.getJSONObject(j)
                 val en = if (e.isNull("episode")) null else e.optInt("episode")
                 val tag = if (en != null) String.format("S%02dE%02d", sn, en) else String.format("S%02d", sn)
-                out.add(PlayFile(e.optInt("fid"), tag + "  " + e.str("name"), e.optLong("size"), e.optBoolean("watched"), e.optLong("pos"), e.optLong("dur"), subsOf(e)))
+                val raw = e.str("name")
+                val nice = if (en != null && raw.substringAfterLast('.', "").lowercase() in setOf("mkv", "mp4", "avi", "mov", "m4v", "ts", "webm", "wmv")) tr("Серия ", "Episode ") + en else raw
+                out.add(PlayFile(e.optInt("fid"), tag + "  " + nice, e.optLong("size"), e.optBoolean("watched"), e.optLong("pos"), e.optLong("dur"), subsOf(e)))
             }
         }
     }

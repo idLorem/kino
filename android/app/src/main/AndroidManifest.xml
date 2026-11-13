@@ -13,6 +13,7 @@
         android:required="false" />
 
     <application
+        android:name=".KinoApplication"
         android:largeHeap="true"
         android:allowBackup="false"
         android:banner="@drawable/banner"

@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -66,6 +66,8 @@ WATCHLIST_PATH = os.path.join(APP_DIR, "watchlist.json")
 WATCHED_PATH = os.path.join(APP_DIR, "watched.json")
 PROGRESS_PATH = os.path.join(APP_DIR, "progress.json")
 POSTER_DIR = os.path.join(APP_DIR, "poster_cache")
+IMG_HOSTS = (".tmdb.org", ".media-amazon.com", ".media-imdb.com", ".imdb.com", ".kinopoiskapiunofficial.tech",
+             ".kinopoisk.ru", ".yandex.net", ".yandex.ru", ".ltrbxd.com", ".letterboxd.com")
 PALETTE_PATH = os.path.join(APP_DIR, "palettes.json")
 BG_PATH = os.path.join(APP_DIR, "background.jpg")
 LOG_PATH = os.path.join(APP_DIR, "kino.log")
@@ -119,6 +121,17 @@ def _load_json(path, default):
         return data if isinstance(data, type(default)) else default
     except Exception:
         return default
+
+
+def _prune_posters(days=90):
+    try:
+        old = time.time() - days * 86400
+        for fn in os.listdir(POSTER_DIR):
+            p = os.path.join(POSTER_DIR, fn)
+            if os.path.getmtime(p) < old:
+                os.remove(p)
+    except OSError:
+        pass
 
 
 def _save_json(path, data):
@@ -1201,11 +1214,11 @@ class Api:
         done = dur > 0 and pos >= dur * 0.9
         self._progress_all()
         with self._lock:
-            self._prog["%s|%d" % (item_id, fid)] = {"pos": 0 if done else pos, "dur": dur, "ts": int(time.time()), "done": done}
-            snap = dict(self._prog)
+            self._prog.pop("%s|%d" % (item_id, fid), None)
+            self._prog[paths[fid]] = {"pos": 0 if done else pos, "dur": dur, "ts": int(time.time()), "done": done}
             if done:
                 self._cfg["watched"][paths[fid]] = 1
-            _save_json(PROGRESS_PATH, snap)
+        self._save_prog()
         if done:
             self._save_cfg()
             w = self._cfg["watched"]
@@ -1215,13 +1228,28 @@ class Api:
 
     def tv_progress_clear(self, item_id):
         self._progress_all()
+        it = self._items.get(item_id)
         pre = "%s|" % item_id
+        gone = set(_flat_paths(self._view(it))) if it else set()
         with self._lock:
-            for k in [k for k in self._prog if k.startswith(pre)]:
+            for k in [k for k in self._prog if k.startswith(pre) or k in gone]:
                 del self._prog[k]
-            snap = dict(self._prog)
-            _save_json(PROGRESS_PATH, snap)
+        self._save_prog()
         return {"ok": True}
+
+    def _save_prog(self):
+        with self._lock:
+            if getattr(self, "_prog_timer", None):
+                return
+            self._prog_timer = threading.Timer(3, self._flush_prog)
+            self._prog_timer.daemon = True
+            self._prog_timer.start()
+
+    def _flush_prog(self):
+        with self._lock:
+            self._prog_timer = None
+            snap = dict(self._prog)
+        _save_json(PROGRESS_PATH, snap)
 
     @safe
     def srv_set(self, on, port=None):
@@ -3697,7 +3725,7 @@ class Api:
         latest, cur = self._ver_tuple(d.get("tag_name")), self._ver_tuple(APP_VERSION)
         assets = {a.get("name"): a.get("browser_download_url") for a in (d.get("assets") or []) if isinstance(a, dict)}
         mode = self._update_mode()
-        can = bool((assets.get("installer.exe") or assets.get("kino.exe")) if mode == "frozen" else assets.get("main.py"))
+        can = bool(assets.get("SHA256SUMS") and ((assets.get("installer.exe") or assets.get("kino.exe")) if mode == "frozen" else assets.get("main.py")))
         self._upd = {"assets": assets, "mode": mode}
         return {"ok": True, "available": bool(latest and cur and latest > cur), "current": APP_VERSION,
                 "latest": str(d.get("tag_name") or "").lstrip("vV"), "notes": (d.get("body") or "")[:1200],
@@ -3713,6 +3741,16 @@ class Api:
         if os.name == "nt":
             flags = 0x00000008 | 0x08000000
         subprocess.Popen(args, creationflags=flags, close_fds=True, cwd=APP_DIR)
+
+    def _verify_sha(self, assets, name, data):
+        sums = self._download_release_asset(assets.get("SHA256SUMS"), 65536).decode("utf-8", "replace")
+        want = {}
+        for ln in sums.splitlines():
+            p = ln.split()
+            if len(p) == 2:
+                want[p[1].lstrip("*")] = p[0].lower()
+        if want.get(name) != hashlib.sha256(data).hexdigest():
+            raise ApiError("update", "Контрольная сумма обновления не совпала")
 
     def _validate_main_py(self, data):
         try:
@@ -3740,6 +3778,7 @@ class Api:
         mode, assets = info["mode"], info["assets"]
         if mode in ("launcher", "source"):
             data = self._download_release_asset(assets.get("main.py"), 6 * 1024 * 1024)
+            self._verify_sha(assets, "main.py", data)
             self._validate_main_py(data)
             if mode == "launcher":
                 appdir = os.environ.get("KINO_APP_DIR") or os.path.join(APP_DIR, "app")
@@ -3763,7 +3802,9 @@ class Api:
                 exe = exe[:-10] + "pythonw.exe"
             self._spawn_detached([exe, target, "--after-update"])
         else:
-            data = self._download_release_asset(assets.get("installer.exe") or assets.get("kino.exe"), 400 * 1024 * 1024)
+            exe_name = "installer.exe" if assets.get("installer.exe") else "kino.exe"
+            data = self._download_release_asset(assets.get(exe_name), 400 * 1024 * 1024)
+            self._verify_sha(assets, exe_name, data)
             if data[:2] != b"MZ" or len(data) < 1024 * 1024:
                 raise ApiError("update", "Скачанный файл не является программой")
             exe_path = sys.executable
@@ -3795,7 +3836,7 @@ class Api:
     def _poster_path(url):
         return os.path.join(POSTER_DIR, hashlib.md5(url.encode("utf-8")).hexdigest() + ".bin")
 
-    def _poster_bytes(self, url):
+    def _poster_bytes(self, url, redirects=True):
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             return None
         path = self._poster_path(url)
@@ -3803,13 +3844,15 @@ class Api:
             with open(path, "rb") as f:
                 data = f.read()
             if data and self._sniff(data):
+                os.utime(path)
                 return data
         except OSError:
             pass
         with self._poster_sem:
             try:
                 r = self._http.get(url, headers={"User-Agent": BROWSER_UA,
-                                                 "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}, timeout=15)
+                                                 "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}, timeout=15,
+                                    allow_redirects=redirects)
             except requests.exceptions.RequestException:
                 return None
         data = r.content if r.status_code == 200 else b""
@@ -6769,6 +6812,7 @@ class TvServer:
         self.port = port
         self.httpd = None
         self.fails = {}
+        self.lib = None
         self.stopped = False
 
     def start(self):
@@ -6853,10 +6897,13 @@ class TvServer:
                         m = re.fullmatch(r"/api/poster/([^/]+)", p)
                         if m:
                             return self._poster(m.group(1))
+                        if p == "/api/img":
+                            return self._img((q.get("u") or [""])[0])
                         m = re.fullmatch(r"/api/sub/([^/]+)/(\d+)/(\d+)(?:\.\w+)?", p)
                         if m:
                             return self._sub(m.group(1), int(m.group(2)), int(m.group(3)))
                     if method == "POST":
+                        srv.lib = None
                         d = self._body()
                         if d is None:
                             return self._json(400, {"ok": False, "error": "bad request"})
@@ -6901,12 +6948,22 @@ class TvServer:
 
             def _library(self):
                 api._srv_ensure_scan()
-                items = [_tv_public(api._view(it)) for it in list(api._items.values())]
+                hit = srv.lib
+                if hit and time.time() - hit[0] < 5:
+                    return hit[1]
+                out = self._library_build()
+                srv.lib = (time.time(), out)
+                return out
+
+            def _library_build(self):
+                views = [api._view(it) for it in list(api._items.values())]
+                items = [_tv_public(w) for w in views]
                 prog = api._progress_all()
-                for v in items:
+                for v, w in zip(items, views):
                     best = None
+                    paths = _flat_paths(w)
                     for f in list(v["files"]) + [e for sn in v["seasons"] for e in sn["episodes"]]:
-                        e = prog.get("%s|%d" % (v["id"], f["fid"]))
+                        e = prog.get(paths[f["fid"]]) or prog.get("%s|%d" % (v["id"], f["fid"]))
                         if e and not e.get("done") and e.get("pos", 0) > 5000:
                             f["pos"] = e["pos"]
                             f["dur"] = e.get("dur", 0)
@@ -6920,11 +6977,24 @@ class TvServer:
             def _poster(self, item_id):
                 it = api._items.get(item_id)
                 p = it.get("poster") if it else None
-                if not p or not os.path.isfile(p) or os.path.getsize(p) > 8 * 1024 * 1024:
+                if p and os.path.isfile(p) and os.path.getsize(p) <= 8 * 1024 * 1024:
+                    with open(p, "rb") as fh:
+                        data = fh.read()
+                    mime = "image/png" if p.lower().endswith(".png") else "image/jpeg"
+                else:
                     return self._json(404, {"ok": False})
-                with open(p, "rb") as fh:
-                    data = fh.read()
-                mime = "image/png" if p.lower().endswith(".png") else "image/jpeg"
+                self._head(200, mime, len(data), {"Cache-Control": "max-age=86400"})
+                if self.command != "HEAD":
+                    self.wfile.write(data)
+
+            def _img(self, url):
+                h = (urlparse(url).hostname or "").lower()
+                if not h.endswith(IMG_HOSTS) or not url.startswith("https://"):
+                    return self._json(404, {"ok": False})
+                data = api._poster_bytes(url, redirects=False)
+                mime = api._sniff(data) if data else ""
+                if not mime:
+                    return self._json(404, {"ok": False})
                 self._head(200, mime, len(data), {"Cache-Control": "max-age=86400"})
                 if self.command != "HEAD":
                     self.wfile.write(data)
@@ -7204,6 +7274,7 @@ def main():
         pass
     if not _single_instance():
         return
+    threading.Thread(target=_prune_posters, daemon=True).start()
     api = Api()
     threading.Thread(target=api._autostart_apply, daemon=True).start()
     threading.Thread(target=api._ensure_shortcut, daemon=True).start()

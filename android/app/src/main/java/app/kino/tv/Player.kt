@@ -209,7 +209,6 @@ fun PlayerScreen(
     var started by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(true) }
-    var seekable by remember { mutableStateOf(true) }
     var ended by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var pos by remember { mutableLongStateOf(0L) }
@@ -235,7 +234,12 @@ fun PlayerScreen(
     var rate by remember { mutableFloatStateOf(1f) }
     var delayMs by remember { mutableIntStateOf(Prefs.str(ctx, "adelay", "0").toIntOrNull() ?: 0) }
     var scaleIdx by remember { mutableIntStateOf(Prefs.str(ctx, "scale", "0").toIntOrNull() ?: 0) }
-    var brightness by remember { mutableFloatStateOf(0.5f) }
+    var brightness by remember {
+        mutableFloatStateOf(
+            (act?.window?.attributes?.screenBrightness ?: -1f).takeIf { it >= 0f }
+                ?: (android.provider.Settings.System.getInt(ctx.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, 128) / 255f).coerceIn(0.02f, 1f),
+        )
+    }
     var volF by remember { mutableFloatStateOf(0f) }
     var barW by remember { mutableIntStateOf(1) }
 
@@ -317,7 +321,19 @@ fun PlayerScreen(
         onDispose {
             a?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             a?.pipReady = false
+            a?.window?.let { w ->
+                val lp = w.attributes
+                lp.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                w.attributes = lp
+            }
         }
+    }
+
+    val keepOn = (playing || buffering) && !failed
+    DisposableEffect(keepOn) {
+        val w = act?.window
+        if (keepOn) w?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { w?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
 
     var reloadOnStart by remember { mutableStateOf(false) }
@@ -343,6 +359,8 @@ fun PlayerScreen(
     }
 
     DisposableEffect(gen) {
+        audioList = emptyList()
+        textList = emptyList()
         val m = Media(vlc, Uri.parse(conn.streamUrl(item.id, file.fid)))
         m.setHWDecoderEnabled(hw, false)
         m.addOption(":network-caching=3000")
@@ -354,7 +372,6 @@ fun PlayerScreen(
                 when (event.type) {
                     MediaPlayer.Event.Playing -> { started = true; buffering = false }
                     MediaPlayer.Event.Buffering -> buffering = event.getBuffering() < 100f
-                    MediaPlayer.Event.SeekableChanged -> seekable = event.getSeekable()
                     MediaPlayer.Event.EndReached -> ended = true
                     MediaPlayer.Event.EncounteredError -> failed = true
                     MediaPlayer.Event.ESAdded, MediaPlayer.Event.ESDeleted, MediaPlayer.Event.ESSelected -> tracksTick++

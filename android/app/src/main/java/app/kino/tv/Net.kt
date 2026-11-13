@@ -2,6 +2,8 @@ package app.kino.tv
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -9,6 +11,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.InetAddress
+import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.net.URL
 
@@ -17,6 +20,7 @@ class HttpFail(val code: Int, message: String) : Exception(message)
 data class Conn(val host: String, val port: Int, val token: String) {
     val base: String get() = "http://$host:$port"
     fun streamUrl(id: String, fid: Int): String = "$base/api/stream/$id/$fid?t=$token"
+    fun imgUrl(u: String): String = "$base/api/img?t=$token&u=" + java.net.URLEncoder.encode(u, "UTF-8")
     fun posterUrl(id: String): String = "$base/api/poster/$id?t=$token"
 }
 
@@ -65,13 +69,33 @@ object Net {
 
     private val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
 
+    @Volatile
+    private var lastPost: Job? = null
+
     fun postAsync(conn: Conn, path: String, body: JSONObject) {
-        bg.launch {
+        lastPost = bg.launch {
             try {
                 call("POST", conn.base + path, conn.token, body.toString())
             } catch (_: Exception) {
             }
         }
+    }
+
+    suspend fun flush() {
+        withTimeoutOrNull(2500) { lastPost?.join() }
+    }
+
+    private fun broadcasts(): List<InetAddress> {
+        val out = LinkedHashSet<InetAddress>()
+        out.add(InetAddress.getByName("255.255.255.255"))
+        try {
+            for (ni in NetworkInterface.getNetworkInterfaces()) {
+                if (!ni.isUp || ni.isLoopback) continue
+                for (a in ni.interfaceAddresses) a.broadcast?.let { out.add(it) }
+            }
+        } catch (_: Exception) {
+        }
+        return out.toList()
     }
 
     suspend fun discover(): List<Found> = withContext(Dispatchers.IO) {
@@ -81,10 +105,13 @@ object Net {
             socket.broadcast = true
             socket.soTimeout = 400
             val msg = "KINO?".toByteArray()
+            val targets = broadcasts()
             for (round in 0 until 3) {
-                try {
-                    socket.send(DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 8766))
-                } catch (_: Exception) {
+                for (dst in targets) {
+                    try {
+                        socket.send(DatagramPacket(msg, msg.size, dst, 8766))
+                    } catch (_: Exception) {
+                    }
                 }
                 val end = System.currentTimeMillis() + 900
                 while (System.currentTimeMillis() < end) {
@@ -92,7 +119,7 @@ object Net {
                         val buf = ByteArray(512)
                         val p = DatagramPacket(buf, buf.size)
                         socket.receive(p)
-                        val j = JSONObject(String(p.data, 0, p.length))
+                        val j = JSONObject(String(p.data, 0, p.length, Charsets.UTF_8))
                         val host = p.address.hostAddress ?: ""
                         if (j.optString("app") == "kino" && host.isNotEmpty()) {
                             found[host] = Found(host, j.optInt("port", 8765), j.optString("name", host))
@@ -139,15 +166,6 @@ object Prefs {
 
     fun clear(ctx: Context) {
         ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit().remove("token").apply()
-    }
-
-    fun position(ctx: Context, key: String): Long =
-        ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE).getLong("pos_$key", 0L)
-
-    fun setPosition(ctx: Context, key: String, ms: Long) {
-        val e = ctx.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit()
-        if (ms > 0) e.putLong("pos_$key", ms) else e.remove("pos_$key")
-        e.apply()
     }
 
     fun isTv(ctx: Context): Boolean {
