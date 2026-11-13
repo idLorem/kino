@@ -27,10 +27,10 @@ jobs:
             echo "$KS" | base64 -d > "$RUNNER_TEMP/kino.keystore"
             echo "KINO_KS=$RUNNER_TEMP/kino.keystore" >> "$GITHUB_ENV"
           fi
-      - run: gradle -p android assembleDebug --no-daemon -PverName=${GITHUB_REF_NAME#v} -PverCode=$((100 + ${{ github.run_number }}))
+      - run: gradle -p android assembleRelease --no-daemon -PverName=${GITHUB_REF_NAME#v} -PverCode=$((100 + ${{ github.run_number }}))
         env:
           KINO_KS_PASS: ${{ secrets.KINO_KS_PASS }}
-      - run: cp android/app/build/outputs/apk/debug/app-debug.apk kino.apk
+      - run: cp android/app/build/outputs/apk/release/app-release.apk kino.apk
       - uses: actions/upload-artifact@v4
         with:
           name: kino-apk

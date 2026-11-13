@@ -39,7 +39,10 @@ android {
             }
         }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (!ksPath.isNullOrEmpty() && !ksPass.isNullOrEmpty()) signingConfigs.getByName("kino") else signingConfigs.getByName("debug")
         }
     }
 
