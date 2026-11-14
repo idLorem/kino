@@ -8,94 +8,72 @@
 
 ## English
 
-A catalog for your local movies and series on Windows, with an Android TV and phone client that streams from the PC.
+A catalog for local movies and series on Windows, with an Android TV and phone client for streaming from your PC.
 
 ### Features
 
-- Catalog of your media folders with posters, descriptions, genres, countries and ratings (IMDb first, then Kinopoisk, TMDB, Letterboxd)
-- Tabs Not watched, Watchlist and Watched, filters by type and genre, sorting, search
-- Watchlist with title search and import from a Letterboxd profile
-- Pin, hide, mark as watched; right-click menus on cards and posters; choose a poster source or remove it; fix a wrong match
-- Russian and English interface with metadata in your language: Kinopoisk for Russian, OMDb and IMDb for English
-- Open the library of another PC on your network, or from anywhere through the built-in AmneziaWG VPN
-- Android TV and phone app: the same catalog, audio and subtitle selection, resume where you stopped, watched marks
-- Updates from GitHub releases, minimize to tray
+- Auto-fetches posters, descriptions and ratings (IMDb, Kinopoisk, TMDB, Letterboxd)
+- Not watched, Watchlist and Watched tabs, search, sorting and filters
+- Import a watchlist from a public Letterboxd profile
+- Pin, hide, mark as watched, swap posters or fix wrong matches via right-click
+- English and Russian interface with matching metadata (OMDb and IMDb for English, Kinopoisk for Russian)
+- Access another PC's library over LAN or remotely via the built-in AmneziaWG VPN
+- Android TV and phone app with audio and subtitle selection and playback resume
 
 ### Install
 
-1. Download `installer.exe` from [Releases](../../releases/latest) and run it.
-2. On first launch pick your media folder and a language.
-3. API keys are optional: [Kinopoisk Unofficial](https://kinopoiskapiunofficial.tech) for Russian and [OMDb](https://www.omdbapi.com/apikey.aspx) for English make matching faster and more precise. IMDb ratings are filled in even without a key.
+1. Download and run `installer.exe` from [Releases](../../releases/latest).
+2. Pick your media folder and language on first launch.
+3. Optional: add [OMDb](https://www.omdbapi.com/apikey.aspx) (English) or [Kinopoisk Unofficial](https://kinopoiskapiunofficial.tech) (Russian) API keys in settings for faster, more accurate matching. IMDb ratings work without keys.
 
 ### Android TV and phone
 
-1. In Kino open Settings, TV access, and turn on the server. A PIN is optional.
-2. Install `kino.apk` from [Releases](../../releases/latest) on the TV or phone.
-3. Open the app, pick your PC or enter its address, enter the PIN.
+1. Enable the server in Settings → TV access (the PIN is optional).
+2. Install `kino.apk` from [Releases](../../releases/latest), select your PC (or enter its IP) and type the PIN.
 
-If Windows asks, allow Kino through the firewall on private networks. Audio that the device cannot decode (like DTS) is converted or skipped automatically.
+Allow Kino through Windows Firewall on private networks if prompted. Unsupported audio (like DTS) is converted or skipped automatically.
 
-### Library of another PC
+### Another PC and remote VPN
 
-Turn on the server in Kino on the PC that holds the films, then on the second PC press the PC button in the toolbar and pick the computer or enter its address and PIN. Kino can reconnect to it automatically on startup (the Auto connect switch). Pins, hidden and watched marks stay on the viewing PC and never change the library at home.
+- **LAN:** turn on the server on the host PC, then click PC in the toolbar on the second machine (Auto connect is supported). Pins, hidden items and watched marks stay local and never alter the host library.
+- **Over the internet:** load an AmneziaWG native `.conf` file in the remote library window, enable Connect through VPN, then enter your host's local IP (for example `192.168.0.10:8765`) and the PIN. No separate VPN app is needed.
 
-### Over the internet with VPN
+### Letterboxd
 
-Kino has a built-in AmneziaWG client, so no extra VPN app is needed.
-
-1. Export a config from Amnezia in the AmneziaWG native format (a `.conf` file).
-2. In the remote library window pick the file under VPN (AmneziaWG) or paste the text, and turn on Connect through VPN.
-3. Enter the address of the PC inside your home network, like `192.168.0.10:8765`, and its PIN.
-
-The VPN is used only to reach the other PC. Posters are loaded through it too.
-
-### Letterboxd watchlist
-
-Settings, Letterboxd, enter your username. The watchlist must be public.
+Settings → Letterboxd → enter your username (the watchlist must be public).
 
 ## Русский
 
-Каталог локальных фильмов и сериалов для Windows и клиент для Android TV и телефона, который показывает фильмы с компьютера.
+Каталог локальных фильмов и сериалов для Windows с клиентом для Android TV и телефона для просмотра с ПК.
 
 ### Возможности
 
-- Каталог ваших папок с постерами, описаниями, жанрами, странами и рейтингами (сначала IMDb, затем Кинопоиск, TMDB, Letterboxd)
-- Вкладки «Не просмотрено», «Хочу посмотреть» и «Просмотрено», фильтры по типу и жанру, сортировка, поиск
-- Список «Хочу посмотреть» с поиском по названию и импортом из профиля Letterboxd
-- Закрепить, скрыть, отметить просмотренным; меню по правой кнопке на карточках и постерах; выбор источника постера или его удаление; исправление неверного совпадения
-- Интерфейс на русском и английском, метаданные на вашем языке: Кинопоиск для русского, OMDb и IMDb для английского
-- Библиотека другого компьютера в сети или из любой точки через встроенный VPN AmneziaWG
-- Приложение для Android TV и телефона: тот же каталог, выбор аудио и субтитров, продолжение с места остановки, отметки просмотра
-- Обновления из релизов GitHub, сворачивание в трей
+- Автоподбор постеров, описаний и рейтингов (IMDb, Кинопоиск, TMDB, Letterboxd)
+- Вкладки «Не просмотрено», «Хочу посмотреть» и «Просмотрено», поиск, сортировка и фильтры
+- Импорт списка «Хочу посмотреть» из открытого профиля Letterboxd
+- Закрепление, скрытие, отметки просмотра, смена постера и правка неверных совпадений по правому клику
+- Русский и английский интерфейс с метаданными на выбранном языке (Кинопоиск для русского, OMDb и IMDb для английского)
+- Доступ к библиотеке другого ПК по локальной сети или через встроенный AmneziaWG VPN
+- Приложение для Android TV и телефона с выбором аудио и субтитров и продолжением просмотра
 
 ### Установка
 
-1. Скачайте `installer.exe` из [Releases](../../releases/latest) и запустите его.
-2. При первом запуске выберите папку с фильмами и язык.
-3. Ключи API необязательны: [Кинопоиск Unofficial](https://kinopoiskapiunofficial.tech) для русского и [OMDb](https://www.omdbapi.com/apikey.aspx) для английского делают поиск быстрее и точнее. Рейтинг IMDb подтягивается и без ключа.
+1. Скачайте и запустите `installer.exe` из [Releases](../../releases/latest).
+2. При первом запуске выберите папку с медиа и язык.
+3. Необязательно: добавьте в настройках ключи API [Кинопоиск Unofficial](https://kinopoiskapiunofficial.tech) (русский) или [OMDb](https://www.omdbapi.com/apikey.aspx) (английский) для более точного поиска. Рейтинги IMDb работают без ключей.
 
 ### Android TV и телефон
 
-1. В Kino откройте «Настройки», «Доступ с телевизора» и включите сервер. PIN необязателен.
-2. Установите `kino.apk` из [Releases](../../releases/latest) на ТВ или телефон.
-3. Откройте приложение, выберите компьютер или введите его адрес, введите PIN.
+1. Включите сервер в «Настройки» → «Доступ с телевизора» (PIN по желанию).
+2. Установите `kino.apk` из [Releases](../../releases/latest), выберите ПК (или введите IP) и укажите PIN.
 
-Если Windows спросит, разрешите Kino в брандмауэре для частной сети. Звук, который устройство не может декодировать (например, DTS), конвертируется или пропускается автоматически.
+Разрешите Kino доступ в брандмауэре Windows для частной сети, если появится запрос. Неподдерживаемый звук (например, DTS) конвертируется или пропускается автоматически.
 
-### Библиотека другого компьютера
+### Другой ПК и VPN
 
-Включите сервер в Kino на компьютере с фильмами, а на втором нажмите кнопку «Другой ПК» на панели, выберите компьютер или введите его адрес и PIN. Kino может подключаться к нему сам при запуске (переключатель «Автоподключение»). Закрепления, скрытые и просмотренные хранятся на том компьютере, где вы смотрите, и не меняют библиотеку дома.
+- **По локальной сети:** включите сервер на основном ПК, а на втором нажмите «Другой ПК» на панели (есть автоподключение). Закрепления, скрытые и просмотренные хранятся локально и не меняют библиотеку на основном ПК.
+- **Через интернет:** загрузите `.conf` в формате AmneziaWG native в окне удалённой библиотеки, включите «Подключаться через VPN» и введите локальный IP домашнего ПК (например, `192.168.0.10:8765`) и PIN. Отдельное приложение VPN не нужно.
 
-### Через интернет по VPN
+### Letterboxd
 
-В Kino встроен клиент AmneziaWG, отдельное приложение VPN не нужно.
-
-1. Экспортируйте конфиг из Amnezia в формате AmneziaWG native (файл `.conf`).
-2. В окне удалённой библиотеки в блоке «VPN (AmneziaWG)» выберите файл или вставьте текст и включите «Подключаться через VPN».
-3. Введите адрес компьютера в домашней сети, например `192.168.0.10:8765`, и PIN.
-
-VPN используется только для доступа к другому компьютеру. Постеры тоже грузятся через него.
-
-### Список Letterboxd
-
-«Настройки», Letterboxd, введите ник. Список должен быть открыт для всех.
+«Настройки» → Letterboxd → укажите ник (список должен быть публичным).
