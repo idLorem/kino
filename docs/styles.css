@@ -11,7 +11,7 @@ h1, h2, h3 { color: var(--color-ink); }
 .nav { position: sticky; top: 0; z-index: var(--z-sticky-nav); background: color-mix(in oklab, var(--color-paper) 88%, transparent); border-bottom: var(--rule-hair) solid var(--color-rule); }
 .nav .container { display: flex; align-items: center; gap: var(--space-xl); min-height: 72px; }
 .wordmark { font-family: var(--font-display); font-weight: var(--display-weight); font-size: var(--text-xl); letter-spacing: var(--tracking-display); text-decoration: none; margin-right: auto; }
-.logo { display: block; height: 28px; aspect-ratio: 696 / 365; background: var(--color-ink); -webkit-mask: url("images/logo.png") center / contain no-repeat; mask: url("images/logo.png") center / contain no-repeat; }
+.logo { display: block; height: 40px; aspect-ratio: 696 / 365; background: var(--color-ink); -webkit-mask: url("images/logo.png") center / contain no-repeat; mask: url("images/logo.png") center / contain no-repeat; }
 .footer .mast .logo { height: clamp(64px, 9vw, 120px); }
 .nav-links { display: flex; gap: var(--space-xl); list-style: none; margin: 0; padding: 0; font-size: var(--text-sm); font-weight: 500; }
 .nav-links a { color: var(--color-ink-2); text-decoration: none; transition: color var(--dur-short) var(--ease-out); }
@@ -51,10 +51,10 @@ section { padding-top: var(--section-gap); }
 .rows--tight dt { font-size: var(--text-title); }
 .rows--tight dd { font-size: var(--text-md); }
 
-.band { color: var(--color-ink); margin-top: var(--section-gap); padding-block: var(--section-gap-s); background: var(--color-paper-2); border-block: var(--rule-hair) solid var(--color-rule); }
+.band { color: var(--color-ink); margin-top: var(--section-gap); padding-block: var(--space-2xl); background: var(--color-paper-2); border-block: var(--rule-hair) solid var(--color-rule); }
 .band .container { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: var(--gap-columns); align-items: center; }
-.statement { font-size: var(--text-display); line-height: 1.02; max-width: 14ch; }
-:lang(ru) .statement { font-size: var(--text-display-s); line-height: 1.08; max-width: 16ch; }
+.statement { font-size: var(--text-display); line-height: 1.02; max-width: 18ch; }
+:lang(ru) .statement { font-size: var(--text-display-s); line-height: 1.08; max-width: 22ch; }
 .steps { margin: 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: var(--space-md); }
 .steps li { counter-increment: step; display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); align-items: baseline; color: var(--color-ink-2); }
 .steps li::before { content: counter(step); font-family: var(--font-display); font-weight: var(--display-weight); font-size: var(--text-xl); color: var(--color-ink); font-variant-numeric: lining-nums tabular-nums; }
