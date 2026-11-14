@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -4056,6 +4056,14 @@ class Api:
     def _poster_path(url):
         return os.path.join(POSTER_DIR, hashlib.md5(url.encode("utf-8")).hexdigest() + ".bin")
 
+    def _remote_img(self, url):
+        if not self._rem():
+            return None
+        try:
+            return self._rem_http("GET", "/api/img?u=" + quote(url, safe=""), timeout=20).content
+        except ApiError:
+            return None
+
     def _poster_bytes(self, url, redirects=True):
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             return None
@@ -4068,14 +4076,16 @@ class Api:
                 return data
         except OSError:
             pass
-        with self._poster_sem:
-            try:
-                r = self._http.get(url, headers={"User-Agent": BROWSER_UA,
-                                                 "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}, timeout=15,
-                                    allow_redirects=redirects)
-            except requests.exceptions.RequestException:
-                return None
-        data = r.content if r.status_code == 200 else b""
+        data = self._remote_img(url)
+        if not data:
+            with self._poster_sem:
+                try:
+                    r = self._http.get(url, headers={"User-Agent": BROWSER_UA,
+                                                     "Accept": "image/avif,image/webp,image/*,*/*;q=0.8"}, timeout=15,
+                                        allow_redirects=redirects)
+                except requests.exceptions.RequestException:
+                    return None
+            data = r.content if r.status_code == 200 else b""
         if not data or len(data) > 6 * 1024 * 1024 or not self._sniff(data):
             return None
         try:
