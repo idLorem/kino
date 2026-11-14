@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun/netstack"
+	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/device"
+	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
 )
 
 type wgConf struct {
@@ -90,6 +90,16 @@ func parse(r io.Reader) (*wgConf, error) {
 		case "interface.mtu":
 			if n, err := strconv.Atoi(v); err == nil && n >= 576 && n <= 1500 {
 				c.mtu = n
+			}
+		case "interface.jc", "interface.jmin", "interface.jmax":
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				fmt.Fprintf(&c.uapi, "%s=%d\n", k, n)
+			}
+		case "interface.s1", "interface.s2", "interface.s3", "interface.s4",
+			"interface.h1", "interface.h2", "interface.h3", "interface.h4",
+			"interface.i1", "interface.i2", "interface.i3", "interface.i4", "interface.i5":
+			if v != "" {
+				fmt.Fprintf(&c.uapi, "%s=%s\n", k, v)
 			}
 		case "peer.publickey":
 			h, err := b64hex(v)
@@ -194,14 +204,14 @@ func tunnel(c *wgConf, listen, target string, ready func(addr string)) error {
 	}
 	defer ln.Close()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if o, err := tnet.DialContext(ctx, "tcp", target); err == nil {
 			o.Close()
 		}
 	}()
 	for i := 0; !handshaken(dev); i++ {
-		if i >= 80 {
+		if i >= 150 {
 			return errors.New("нет ответа от VPN-сервера: проверьте конфиг, Endpoint и UDP-порт")
 		}
 		time.Sleep(100 * time.Millisecond)

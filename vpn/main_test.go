@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"golang.org/x/crypto/curve25519"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/device"
-	"golang.zx2c4.com/wireguard/tun/netstack"
+	"github.com/amnezia-vpn/amneziawg-go/conn"
+	"github.com/amnezia-vpn/amneziawg-go/device"
+	"github.com/amnezia-vpn/amneziawg-go/tun/netstack"
 )
 
 const sample = `[Interface]
@@ -49,6 +49,40 @@ func TestParse(t *testing.T) {
 }
 
 func TestTunnel(t *testing.T) {
+	runTunnel(t, "", "")
+}
+
+func TestTunnelAmnezia(t *testing.T) {
+	keys := []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"}
+	vals := []string{"4", "40", "70", "15", "23", "18", "9", "100000-200000", "300000-400000", "500000-600000", "700000-800000"}
+	var cli, srv string
+	for i, k := range keys {
+		cli += k + " = " + vals[i] + "\n"
+		srv += k + "=" + vals[i] + "\n"
+	}
+	runTunnel(t, cli, srv)
+}
+
+func TestParseAmnezia(t *testing.T) {
+	conf := strings.Replace(sample, "DNS = 10.8.0.1\n", "DNS = 10.8.0.1\nJc = 4\nJmin = 0\nS1 = 15\nH1 = 100-200\nI1 = <b 0xf6ab><r 16>\nI2 =\n", 1)
+	c, err := parse(strings.NewReader(conf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := c.uapi.String()
+	for _, w := range []string{"jc=4\n", "s1=15\n", "h1=100-200\n", "i1=<b 0xf6ab><r 16>\n"} {
+		if !strings.Contains(u, w) {
+			t.Fatal("missing", w, u)
+		}
+	}
+	for _, w := range []string{"jmin", "i2"} {
+		if strings.Contains(u, w) {
+			t.Fatal("unexpected", w, u)
+		}
+	}
+}
+
+func runTunnel(t *testing.T, cliExtra, srvExtra string) {
 	var sk, ck [32]byte
 	rand.Read(sk[:])
 	rand.Read(ck[:])
@@ -63,7 +97,7 @@ func TestTunnel(t *testing.T) {
 	}
 	sdev := device.NewDevice(stun, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, ""))
 	defer sdev.Close()
-	if err := sdev.IpcSet("private_key=" + h(sk[:]) + "\nlisten_port=51999\npublic_key=" + h(cpub) + "\nallowed_ip=10.9.0.2/32\n"); err != nil {
+	if err := sdev.IpcSet("private_key=" + h(sk[:]) + "\n" + srvExtra + "listen_port=51999\npublic_key=" + h(cpub) + "\nallowed_ip=10.9.0.2/32\n"); err != nil {
 		t.Fatal(err)
 	}
 	sdev.Up()
@@ -73,7 +107,7 @@ func TestTunnel(t *testing.T) {
 	}
 	go http.Serve(sl, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("hello-through-vpn")) }))
 
-	cfg := "[Interface]\nPrivateKey = " + e(ck[:]) + "\nAddress = 10.9.0.2/24\n[Peer]\nPublicKey = " + e(spub) + "\nAllowedIPs = 10.9.0.0/24\nEndpoint = 127.0.0.1:51999\nPersistentKeepalive = 1\n"
+	cfg := "[Interface]\nPrivateKey = " + e(ck[:]) + "\nAddress = 10.9.0.2/24\n" + cliExtra + "[Peer]\nPublicKey = " + e(spub) + "\nAllowedIPs = 10.9.0.0/24\nEndpoint = 127.0.0.1:51999\nPersistentKeepalive = 1\n"
 	c, err := parse(strings.NewReader(cfg))
 	if err != nil {
 		t.Fatal(err)
