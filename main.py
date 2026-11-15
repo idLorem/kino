@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.0.10"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -5374,7 +5374,7 @@ async function fixAuto(){
   else { S.fix.msg=({notfound:"Автопоиск ничего не нашёл — введите название вручную.",nokey:"Нет API-ключа (Настройки).",neterr:"Нет подключения к интернету.",auth:"API-ключ отклонён.",limit:"Лимит запросов исчерпан."})[st]||"Не удалось выполнить автопоиск."; const box=$("#fixRes"); if(box)box.innerHTML=fixResults(); }
 }
 
-const RM={servers:[],busy:false,msg:"",vmsg:"",vinfo:false,st:null,host:"",pin:"",vhost:"",vpin:""};
+const RM={servers:[],busy:false,man:false,msg:"",vmsg:"",vinfo:false,st:null,host:"",pin:"",vhost:"",vpin:""};
 async function openRemote(){
   let st=null; try{ st=await api("remote_state"); }catch(e){}
   RM.st=st&&st.ok?st:{connected:false}; RM.msg=""; RM.vmsg=""; RM.servers=[];
@@ -5407,15 +5407,15 @@ function remoteBodyHTML(){
       <div class="row"><button class="btn primary" data-act="remote-off">Вернуться к моей медиатеке</button></div>`;
   }
   return `<div id="rmNet">${remoteNetHTML()}</div>
-    <div class="rm-sec"><div class="sec-t">Адрес вручную</div>
-      <div class="rm-form"><input id="r-host" class="inp" placeholder="192.168.1.10" value="${esc(RM.host)}" autocomplete="off" spellcheck="false"><input id="r-pin" class="inp" placeholder="PIN" value="${esc(RM.pin)}" autocomplete="off" inputmode="numeric" maxlength="6"><button class="btn primary" data-act="remote-go">Подключиться</button></div>
+    <div class="rm-sec"><button class="btn rm-srv" data-act="remote-man">${svg("plus",16)}<b>Адрес вручную</b></button>
+      ${RM.man||RM.msg||RM.host?`<div class="rm-form" style="margin-top:10px"><input id="r-host" class="inp" placeholder="192.168.1.10:8765" value="${esc(RM.host)}" autocomplete="off" spellcheck="false"><input id="r-pin" class="inp" placeholder="PIN" value="${esc(RM.pin)}" autocomplete="off" inputmode="numeric" maxlength="6"><button class="btn primary" data-act="remote-go">Подключиться</button></div>`:""}
       ${st.vpn&&st.vpn.conf?"":remoteSavedHTML(st)}
       ${RM.msg?`<div class="rm-msg">${esc(RM.msg)}</div>`:""}</div>
     <div class="rm-sec"><div class="sec-t">VPN (AmneziaWG)</div>
       <label class="radio sw"><input type="checkbox" data-act="vpn-on" ${st.vpn&&st.vpn.on?"checked":""}${st.vpn&&st.vpn.conf?"":" disabled"}> Подключаться через VPN</label>
       <div class="vpn-btns"><button class="btn vpn-file${st.vpn&&st.vpn.conf?" ok":""}" data-act="vpn-file" title="${st.vpn&&st.vpn.conf?"Выбрать другой файл":""}">${st.vpn&&st.vpn.conf?svg("check",14)+" "+esc(st.vpn.name||"Конфиг"):"Выбрать файл .conf…"}</button><button class="btn" data-act="vpn-paste">Вставить</button>${st.vpn&&st.vpn.conf?`<button class="btn" data-act="vpn-del">Удалить конфиг</button>`:""}</div>
       ${st.vpn&&st.vpn.conf?`<div class="sec-t" style="margin-top:16px">Адрес в локальной сети</div>
-      <div class="vpn-addr"><input id="v-host" class="inp" placeholder="http://192.168.0.147:8765/" value="${esc(RM.vhost)}" autocomplete="off" spellcheck="false"><input id="v-pin" class="inp" placeholder="PIN" value="${esc(RM.vpin)}" autocomplete="off" inputmode="numeric" maxlength="6"><button class="btn primary" data-act="vpn-go">Подключиться</button></div>
+      <div class="vpn-addr"><input id="v-host" class="inp" placeholder="http://192.168.1.10:8765/" value="${esc(RM.vhost)}" autocomplete="off" spellcheck="false"><input id="v-pin" class="inp" placeholder="PIN" value="${esc(RM.vpin)}" autocomplete="off" inputmode="numeric" maxlength="6"><button class="btn primary" data-act="vpn-go">Подключиться</button></div>
       ${RM.vmsg?`<div class="rm-msg${RM.vinfo?" info":""}">${esc(RM.vmsg)}</div>`:""}
       ${remoteSavedHTML(st)}`:""}</div>
     <div class="rm-help">Включите удаленный доступ на другом ПК</div>`;
@@ -6013,6 +6013,7 @@ document.addEventListener("click",async e=>{
     case "remote": openRemote(); break;
     case "remote-scan": remoteScan(); break;
     case "remote-pick": { const x=RM.servers[Number(t.dataset.i)]; if(x){ RM.host=x.host+":"+x.port; remoteGo(RM.host); } break; }
+    case "remote-man": RM.man=!RM.man; renderRemote(); if(RM.man){ const h=document.getElementById("r-host"); if(h)h.focus(); } break;
     case "remote-go": remoteGo(); break;
     case "remote-last": remoteLast(); break;
     case "remote-off": remoteOff(); break;
