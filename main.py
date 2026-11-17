@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.10"
+APP_VERSION = "1.0.11"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
