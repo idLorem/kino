@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -7238,6 +7238,16 @@ class TvServer:
         self.rf = 0
         self.stopped = False
 
+    def fill(self, budget=40):
+        end = time.time() + budget
+        with self.api._lock:
+            todo = [i for i in self.api._items if i not in self.api._cache["items"]]
+        for i in todo:
+            if time.time() > end:
+                break
+            self.api.fetch_meta(i)
+        self.lib = None
+
     def start(self):
         api = self.api
         srv = self
@@ -7344,6 +7354,7 @@ class TvServer:
                         if p == "/api/refresh":
                             if time.time() - srv.rf >= 3:
                                 api.scan()
+                                srv.fill()
                                 srv.rf = time.time()
                             return self._json(200, self._library())
                     self._json(404, {"ok": False, "error": "not found"})
