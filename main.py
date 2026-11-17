@@ -1666,9 +1666,9 @@ class Api:
                 "vpn": {"conf": os.path.isfile(VPN_CONF), "on": self._cfg.get("vpn_on") == "1", "name": self._cfg.get("vpn_name") or ""},
                 "last": ({"host": last["host"], "port": last["port"], "name": last.get("name"), "vpn": bool(last.get("vpn"))} if isinstance(last, dict) and last.get("token") else None)}
 
-    def _remote_scan(self):
+    def _remote_scan(self, rescan=False):
         try:
-            d = self._rem_http("GET", "/api/library", timeout=60).json()
+            d = (self._rem_http("POST", "/api/refresh", body={}, timeout=180) if rescan else self._rem_http("GET", "/api/library", timeout=60)).json()
         except ApiError as e:
             return {"ok": False, "error": self._rem_err(e), "items": []}
         rid = [0]
@@ -2769,9 +2769,9 @@ class Api:
         return {"ok": True, "path": os.path.normpath(path) if path else ""}
 
     @safe
-    def scan(self):
+    def scan(self, rescan=False):
         if self._rem():
-            return self._remote_scan()
+            return self._remote_scan(rescan)
         all_roots = self._cfg.get("root_folders") or []
         roots = [r for r in all_roots if os.path.isdir(r)]
         if not all_roots:
@@ -5223,9 +5223,9 @@ function queueMissing(retryMissing){
   enqueue(upg.map(i=>i.id),false);
 }
 
-async function loadLibrary(retryMissing){
+async function loadLibrary(retryMissing,rescan){
   setBusy(true,"Сканирование папки…");
-  let r; try{ r=await api("scan"); }catch(e){ setBusy(false); toast("Ошибка сканирования","err"); return; }
+  let r; try{ r=await api("scan",!!rescan); }catch(e){ setBusy(false); toast("Ошибка сканирования","err"); return; }
   setBusy(false);
   if(!r||!r.ok){ S.items=[]; S.byId=new Map(); refreshGenres(); renderGrid(); if(r&&r.error&&(hasRoots()||S.remote))toast(r.error,"err"); return; }
   S.items=r.items.concat(r.ghosts||[]); S.byId=new Map(S.items.map(i=>[i.id,i]));
@@ -5237,7 +5237,7 @@ async function loadLibrary(retryMissing){
 async function refreshAll(){
   if(!hasRoots()&&!S.remote){ openSettings(); return; }
   const b=$("#btnRefresh"); b.classList.add("spin"); const n0=S.items.filter(i=>!i.ghost).length;
-  await loadLibrary(true);
+  await loadLibrary(true,true);
   b.classList.remove("spin"); const dn=S.items.filter(i=>!i.ghost).length-n0;
   toast("Папки пересканированы"+(dn?` · ${dn>0?"+":""}${dn}`:""));
 }
@@ -7235,6 +7235,7 @@ class TvServer:
         self.httpd = None
         self.fails = {}
         self.lib = None
+        self.rf = 0
         self.stopped = False
 
     def start(self):
@@ -7341,7 +7342,9 @@ class TvServer:
                         if p == "/api/progress/clear":
                             return self._json(200, api.tv_progress_clear(str(d.get("id") or "")))
                         if p == "/api/refresh":
-                            api.scan()
+                            if time.time() - srv.rf >= 3:
+                                api.scan()
+                                srv.rf = time.time()
                             return self._json(200, self._library())
                     self._json(404, {"ok": False, "error": "not found"})
                 except (BrokenPipeError, ConnectionError, OSError):
