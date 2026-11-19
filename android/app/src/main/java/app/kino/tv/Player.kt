@@ -57,6 +57,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
@@ -232,6 +233,7 @@ fun PlayerScreen(
     var scrubStamp by remember { mutableLongStateOf(0L) }
     var dragging by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf("") }
+    var gain by remember { mutableIntStateOf(Prefs.str(ctx, "gain", "100").toIntOrNull()?.coerceIn(0, 200) ?: 100) }
     var rate by remember { mutableFloatStateOf(1f) }
     var delayMs by remember { mutableIntStateOf(Prefs.str(ctx, "adelay", "0").toIntOrNull() ?: 0) }
     var scaleIdx by remember { mutableIntStateOf(Prefs.str(ctx, "scale", "0").toIntOrNull() ?: 0) }
@@ -247,6 +249,8 @@ fun PlayerScreen(
     val rootFr = remember { FocusRequester() }
     val firstTopFr = remember { FocusRequester() }
     val playFr = remember { FocusRequester() }
+    val barFr = remember { FocusRequester() }
+    var barFocus by remember { mutableStateOf(false) }
     val inUi = topFocus || bottomFocus
     val inPip = act?.inPip?.value == true
 
@@ -363,6 +367,7 @@ fun PlayerScreen(
         val m = Media(vlc, Uri.parse(conn.streamUrl(item.id, file.fid)))
         m.setHWDecoderEnabled(hw, false)
         m.addOption(":network-caching=6000")
+        if (aoutStereo) m.addOption(":audio-filter=compressor")
         if (startPos > 0) m.addOption(":start-time=" + (startPos / 1000.0))
         mp.setMedia(m)
         m.release()
@@ -424,7 +429,7 @@ fun PlayerScreen(
         if (started) mp.setRate(rate)
     }
 
-    LaunchedEffect(audioSel, tracksTick, started) {
+    LaunchedEffect(audioSel, tracksTick, started, gain) {
         if (started) {
             var ch = 2
             try {
@@ -438,7 +443,7 @@ fun PlayerScreen(
                     } finally { m.release() }
                 }
             } catch (_: Exception) { }
-            mp.setVolume(if (ch > 2) 150 else 100)
+            mp.setVolume(((if (ch > 2) 200 else 100) * gain / 100).coerceIn(0, 200))
         }
     }
 
@@ -602,7 +607,7 @@ fun PlayerScreen(
                     }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
                         poke()
-                        try { playFr.requestFocus() } catch (_: Exception) { }
+                        try { barFr.requestFocus() } catch (_: Exception) { }
                     }
                     KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_MEDIA_AUDIO_TRACK -> dialog = "audio"
                     KeyEvent.KEYCODE_CAPTIONS -> dialog = "text"
@@ -680,6 +685,21 @@ fun PlayerScreen(
                         .fillMaxWidth()
                         .height(30.dp)
                         .onSizeChanged { barW = it.width.coerceAtLeast(1) }
+                        .focusRequester(barFr)
+                        .onFocusChanged { barFocus = it.isFocused }
+                        .onKeyEvent { e ->
+                            val k = e.nativeKeyEvent.keyCode
+                            val ok = k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT || k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER
+                            if (ok && e.type == KeyEventType.KeyDown) {
+                                when (k) {
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> scrubBy(-10_000L, e.nativeKeyEvent.repeatCount)
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> scrubBy(10_000L, e.nativeKeyEvent.repeatCount)
+                                    else -> if (scrub != null) applyScrub() else togglePlay()
+                                }
+                            }
+                            ok
+                        }
+                        .focusable()
                         .pointerInput(dur) {
                             detectTapGestures(onTap = { o ->
                                 if (dur > 0) {
@@ -699,7 +719,7 @@ fun PlayerScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(20.dp)) {
-                        val th = 6.dp.toPx()
+                        val th = (if (barFocus) 10.dp else 6.dp).toPx()
                         val y = (size.height - th) / 2f
                         val r = th / 2f
                         val frac = if (dur > 0) (shown.toFloat() / dur.toFloat()).coerceIn(0f, 1f) else 0f
@@ -712,9 +732,9 @@ fun PlayerScreen(
                 }
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    Pill("−10", onClick = { seekRel(-10_000) }, hPad = 16.dp)
+                    Pill(tr("Звук −", "Vol −"), onClick = { gain = (gain - 10).coerceAtLeast(0); Prefs.setStr(ctx, "gain", gain.toString()); hud = tr("Звук ", "Level ") + gain + "%"; poke() }, hPad = 16.dp)
                     Pill("", selected = true, onClick = { togglePlay() }, hPad = 26.dp, focusRequester = playFr, leading = { c -> if (playing) PauseGlyph(c, 18.dp) else PlayGlyph(c, 18.dp) })
-                    Pill("+10", onClick = { seekRel(10_000) }, hPad = 16.dp)
+                    Pill(tr("Звук +", "Vol +"), onClick = { gain = (gain + 10).coerceAtMost(200); Prefs.setStr(ctx, "gain", gain.toString()); hud = tr("Звук ", "Level ") + gain + "%"; poke() }, hPad = 16.dp)
                 }
             }
         }
