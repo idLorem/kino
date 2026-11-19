@@ -7,6 +7,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -511,9 +512,7 @@ fun DetailScreen(
                 if (cur.files.size > 1) {
                     Spacer(Modifier.height(18.dp))
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        cur.files.forEach { f ->
-                            Pill((if (f.watched) "✓  " else "") + f.label + (if (f.pos > 0 && f.dur > 0) "  ·  " + (f.pos * 100 / f.dur) + "%" else ""), onClick = { onPlay(cur, f) }, modifier = Modifier.fillMaxWidth())
-                        }
+                        cur.files.forEach { f -> EpisodeRow(f, { onPlay(cur, f) }, { onPlayPc(cur, f) }) }
                     }
                 }
                 if (ghost) Text(tr("Файлов на компьютере нет", "No files on the PC"), color = C.muted, fontSize = 16.sp)
@@ -526,25 +525,30 @@ fun DetailScreen(
                     BackPill(onBack = onBack)
                     Spacer(Modifier.height(12.dp))
                     head()
-                    if (cur.files.size > 1) {
-                        Spacer(Modifier.height(18.dp))
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                            items(cur.files) { f ->
-                                Pill(
-                                    (if (f.watched) "✓  " else "") + f.label + (if (f.pos > 0 && f.dur > 0) "  ·  " + (f.pos * 100 / f.dur) + "%" else ""),
-                                    onClick = { onPlay(cur, f) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    radius = 14.dp,
-                                )
-                            }
-                        }
-                    }
                     if (ghost) {
                         Text(tr("Файлов на компьютере нет", "No files on the PC"), color = C.muted, fontSize = 16.sp)
                     }
                 }
+                if (cur.files.size > 1) {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f).fillMaxHeight()) {
+                        items(cur.files) { f -> EpisodeRow(f, { onPlay(cur, f) }, { onPlayPc(cur, f) }) }
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun EpisodeRow(f: PlayFile, onPlay: () -> Unit, onPc: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Pill(
+            (if (f.watched) "✓  " else "") + f.label + (if (f.pos > 0 && f.dur > 0) "  ·  " + (f.pos * 100 / f.dur) + "%" else ""),
+            onClick = onPlay,
+            modifier = Modifier.weight(1f),
+            radius = 14.dp,
+        )
+        Pill(tr("На ПК", "On PC"), onClick = onPc, radius = 14.dp)
     }
 }
 
