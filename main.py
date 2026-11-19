@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.16"
+APP_VERSION = "1.0.17"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -7320,6 +7320,111 @@ def _vlc_exe(api):
     return shutil.which("vlc")
 
 
+_OUT_CACHE = {"t": 0.0, "mon": [], "aud": []}
+_AUDIO_ID = re.compile(r"\{0\.0\.0\.[0-9A-Fa-f]{8}\}\.\{[0-9A-Fa-f-]{36}\}")
+
+
+def _win_monitors():
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+
+    class MI(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+    cb_t = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(wintypes.RECT), ctypes.c_void_p)
+    u.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MI)]
+    out = []
+
+    def cb(h, dc, rc, lp):
+        mi = MI()
+        mi.cbSize = ctypes.sizeof(MI)
+        if u.GetMonitorInfoW(h, ctypes.byref(mi)):
+            r = mi.rcMonitor
+            out.append({"x": r.left, "y": r.top, "w": r.right - r.left, "h": r.bottom - r.top, "primary": bool(mi.dwFlags & 1)})
+        return 1
+
+    setter = getattr(u, "SetThreadDpiAwarenessContext", None)
+    old = None
+    if setter is not None:
+        setter.restype = ctypes.c_void_p
+        setter.argtypes = [ctypes.c_void_p]
+        try:
+            old = setter(ctypes.c_void_p(-4))
+        except Exception:
+            old = None
+    try:
+        u.EnumDisplayMonitors(None, None, cb_t(cb), None)
+    finally:
+        if old and setter is not None:
+            try:
+                setter(ctypes.c_void_p(old))
+            except Exception:
+                pass
+    return out
+
+
+def _win_audio():
+    if os.name != "nt":
+        return []
+    ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+          "Get-PnpDevice -Class AudioEndpoint -PresentOnly | ForEach-Object { $_.FriendlyName + '|' + $_.InstanceId }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                           capture_output=True, timeout=12, creationflags=0x08000000)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    out = []
+    for ln in r.stdout.decode("utf-8", "replace").splitlines():
+        if "|" not in ln:
+            continue
+        name, iid = ln.rsplit("|", 1)
+        m = _AUDIO_ID.search(iid)
+        if m and name.strip():
+            out.append({"id": m.group(0), "name": name.strip()})
+    return out
+
+
+def _outputs_scan(force=False):
+    if force or time.time() - _OUT_CACHE["t"] > 20:
+        try:
+            mon = _win_monitors()
+        except Exception as e:
+            _log("monitors: %s" % e)
+            mon = []
+        try:
+            aud = _win_audio()
+        except Exception as e:
+            _log("audio devices: %s" % e)
+            aud = []
+        _OUT_CACHE.update(t=time.time(), mon=mon, aud=aud)
+    return _OUT_CACHE["mon"], _OUT_CACHE["aud"]
+
+
+def _mon_key(m):
+    return "%d,%d,%d,%d" % (m["x"], m["y"], m["w"], m["h"])
+
+
+def _mon_label(m, mons, n):
+    base = "%s %d · %d×%d" % ("Монитор", n, m["w"], m["h"])
+    if m["primary"]:
+        return base + " · основной"
+    prim = next((x for x in mons if x["primary"]), None)
+    if prim:
+        if m["x"] >= prim["x"] + prim["w"]:
+            return base + " · справа от основного"
+        if m["x"] + m["w"] <= prim["x"]:
+            return base + " · слева от основного"
+        if m["y"] >= prim["y"] + prim["h"]:
+            return base + " · ниже основного"
+        if m["y"] + m["h"] <= prim["y"]:
+            return base + " · выше основного"
+    return base
+
+
 def _pc_player(api):
     v = _vlc_exe(api)
     if v:
@@ -7494,14 +7599,14 @@ class PcPlayer:
             sess.trust_env = False
             web = (sess, port, secrets.token_hex(8))
             args = [exe, "--fullscreen", "--no-one-instance", "--no-qt-privacy-ask", "--no-qt-updates-notif", "--play-and-exit",
-                    "--extraintf=http", "--http-host=127.0.0.1", "--http-port=%d" % port, "--http-password=" + web[2]]
+                    "--extraintf=http", "--http-host=127.0.0.1", "--http-port=%d" % port, "--http-password=" + web[2]] + self._out_args("vlc")
             if pos > 5000:
                 args.append("--start-time=%.1f" % (pos / 1000.0))
             args += ["--sub-file=" + sp for sp in subs]
             args += ["--"] + ([pp for pp, _ in parts] if parts else [path])
         else:
             target = "edl://" + ";".join("%%%d%%%s" % (len(pp), pp) for pp, _ in parts) if parts else path
-            args = [exe, "--fs", "--force-window=yes", "--no-terminal", "--input-ipc-server=" + MPV_PIPE, "--sub-auto=fuzzy"]
+            args = [exe, "--fs", "--force-window=yes", "--no-terminal", "--input-ipc-server=" + MPV_PIPE, "--sub-auto=fuzzy"] + self._out_args("mpv")
             args += ["--sub-file=" + sp for sp in subs]
             if pos > 5000:
                 args.append("--start=%.1f" % (pos / 1000.0))
@@ -7569,6 +7674,57 @@ class PcPlayer:
         st["ok"] = True
         st["player"] = _pc_player(self.api)[0]
         return st
+
+    def outputs(self):
+        mons, aud = _outputs_scan()
+        cfg = self.api._cfg
+        rows = [{"key": _mon_key(m), "label": _mon_label(m, mons, i + 1), "primary": m["primary"]} for i, m in enumerate(mons)]
+        keys = {r["key"] for r in rows}
+        am = cfg.get("pc_monitor") or ""
+        aa = cfg.get("pc_audio") or ""
+        return {"ok": True, "monitors": rows, "audio": [{"id": a["id"], "name": a["name"]} for a in aud],
+                "monitor": am if am in keys else "", "audioSel": aa if any(a["id"] == aa for a in aud) else "",
+                "player": _pc_player(self.api)[0]}
+
+    def set_output(self, d):
+        mons, aud = _outputs_scan(True)
+        cfg = self.api._cfg
+        if "monitor" in d:
+            key = str(d.get("monitor") or "")
+            if key and key not in {_mon_key(m) for m in mons}:
+                return {"ok": False, "error": "nomonitor"}
+            cfg["pc_monitor"] = key
+        if "audio" in d:
+            aid = str(d.get("audio") or "")
+            if aid and not any(a["id"] == aid for a in aud):
+                return {"ok": False, "error": "noaudio"}
+            cfg["pc_audio"] = aid
+        self.api._save_cfg()
+        with self.lock:
+            active = self.proc is not None and self.proc.poll() is None and self.st.get("active")
+            cur = dict(self.st)
+        restarted = False
+        if active and cur.get("id") is not None:
+            r = self.play(cur["id"], cur.get("fid"), cur.get("pos"))
+            restarted = bool(r.get("ok"))
+        out = self.outputs()
+        out["restarted"] = restarted
+        return out
+
+    def _out_args(self, kind):
+        cfg = self.api._cfg
+        mons, aud = _outputs_scan()
+        args = []
+        key = cfg.get("pc_monitor") or ""
+        if key:
+            order = [m for m in mons if m["primary"]] + [m for m in mons if not m["primary"]] if kind == "vlc" else list(mons)
+            idx = next((i for i, m in enumerate(order) if _mon_key(m) == key), -1)
+            if idx >= 0:
+                args += ["--qt-fullscreen-screennumber=%d" % idx] if kind == "vlc" else ["--screen=%d" % idx, "--fs-screen=%d" % idx]
+        aid = cfg.get("pc_audio") or ""
+        if aid and any(a["id"] == aid for a in aud):
+            args += ["--aout=mmdevice", "--mmdevice-audio-device=" + aid] if kind == "vlc" else ["--audio-device=wasapi/" + aid]
+        return args
 
 
 class TvServer:
@@ -7669,6 +7825,8 @@ class TvServer:
                             return self._json(200, api.wl_list())
                         if p == "/api/pc/state":
                             return self._json(200, api._pc().state())
+                        if p == "/api/pc/outputs":
+                            return self._json(200, api._pc().outputs())
                         m = re.fullmatch(r"/api/stream/([^/]+)/(\d+)", p)
                         if m:
                             return self._stream(m.group(1), int(m.group(2)))
@@ -7700,6 +7858,8 @@ class TvServer:
                             return self._json(200, api._pc().play(str(d.get("id") or ""), d.get("fid"), d.get("pos")))
                         if p == "/api/pc/cmd":
                             return self._json(200, api._pc().command(d))
+                        if p == "/api/pc/output":
+                            return self._json(200, api._pc().set_output(d))
                         if p == "/api/refresh":
                             if time.time() - srv.rf >= 3:
                                 api.scan()

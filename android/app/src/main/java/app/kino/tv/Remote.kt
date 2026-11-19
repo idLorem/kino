@@ -52,6 +52,18 @@ object Pc {
         "net"
     }
 
+    suspend fun outputs(c: Conn): JSONObject? = try {
+        Net.get(c, "/api/pc/outputs")
+    } catch (_: Exception) {
+        null
+    }
+
+    suspend fun setOutput(c: Conn, key: String, v: String): JSONObject? = try {
+        Net.post(c, "/api/pc/output", JSONObject().put(key, v))
+    } catch (_: Exception) {
+        null
+    }
+
     suspend fun cmd(c: Conn, op: String, key: String? = null, v: Any? = null): JSONObject? = try {
         val b = JSONObject().put("op", op)
         if (key != null) b.put(key, v)
@@ -86,6 +98,11 @@ object Hdmi {
     }
 }
 
+private fun JSONObject.items(key: String): List<JSONObject> {
+    val a = optJSONArray(key) ?: return emptyList()
+    return (0 until a.length()).map { a.getJSONObject(it) }
+}
+
 private fun JSONObject.tracks(key: String): List<Triple<Int, String, Boolean>> {
     val a = optJSONArray(key) ?: return emptyList()
     return (0 until a.length()).map { i ->
@@ -104,7 +121,11 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
     var barW by remember { mutableIntStateOf(1) }
     var lost by remember { mutableIntStateOf(0) }
     var wasActive by remember { mutableStateOf(false) }
+    var outs by remember { mutableStateOf<JSONObject?>(null) }
+    var outBusy by remember { mutableStateOf(false) }
     val cp = compact()
+
+    LaunchedEffect(Unit) { outs = Pc.outputs(conn) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -127,6 +148,23 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
         }
     }
 
+    fun pickOut(key: String, v: String) {
+        scope.launch {
+            outBusy = true
+            val r = Pc.setOutput(conn, key, v)
+            if (r != null && r.optBoolean("ok")) outs = r
+            outBusy = false
+        }
+    }
+
+    val o = outs
+    val monList = o?.items("monitors") ?: emptyList()
+    val audList = o?.items("audio") ?: emptyList()
+    val monSel = o?.optString("monitor") ?: ""
+    val audSel = o?.optString("audioSel") ?: ""
+    val monName = monList.firstOrNull { it.optString("key") == monSel }?.optString("label") ?: tr("По умолчанию", "Default")
+    val audName = audList.firstOrNull { it.optString("id") == audSel }?.optString("name") ?: tr("По умолчанию", "Default")
+
     val s = st
     val active = s?.optBoolean("active") == true
     val pos = s?.optLong("pos") ?: 0L
@@ -147,6 +185,7 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 BackPill(onBack = onBack)
                 if (onHdmi != null) Pill(tr("Вход HDMI", "HDMI input"), onClick = onHdmi, hPad = 16.dp)
+                if (monList.isNotEmpty() || audList.isNotEmpty()) Pill(tr("Вывод", "Output"), onClick = { dialog = "out" }, hPad = 16.dp)
             }
             if (s == null) {
                 Text(if (lost > 2) tr("Нет связи с компьютером", "Can't reach the PC") else tr("Загрузка…", "Loading…"), color = C.muted, fontSize = 18.sp)
@@ -215,6 +254,23 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
         }
         val close = { dialog = null }
         when (dialog) {
+            "out" -> DialogBox(tr("Вывод на ПК", "PC output"), close) {
+                Text(
+                    tr("Выбор запоминается. Если фильм играет, плеер перезапустится с того же места.", "The choice is remembered. If a movie is playing, the player restarts from the same spot."),
+                    color = C.muted, fontSize = 14.sp,
+                )
+                if (monList.isNotEmpty()) Pill(tr("Монитор: ", "Monitor: ") + monName, onClick = { dialog = "mon" }, modifier = Modifier.fillMaxWidth())
+                if (audList.isNotEmpty()) Pill(tr("Звук: ", "Audio: ") + audName, onClick = { dialog = "aud" }, modifier = Modifier.fillMaxWidth())
+                if (outBusy) Text(tr("Применяю…", "Applying…"), color = C.muted, fontSize = 14.sp)
+            }
+            "mon" -> DialogBox(tr("Монитор", "Monitor"), close) {
+                val def = Opt(tr("По умолчанию", "Default"), monSel.isEmpty()) { pickOut("monitor", "") }
+                OptionList(listOf(def) + monList.map { m -> Opt(m.optString("label"), m.optString("key") == monSel) { pickOut("monitor", m.optString("key")) } }, onPicked = close)
+            }
+            "aud" -> DialogBox(tr("Аудиовыход", "Audio output"), close) {
+                val def = Opt(tr("По умолчанию", "Default"), audSel.isEmpty()) { pickOut("audio", "") }
+                OptionList(listOf(def) + audList.map { a -> Opt(a.optString("name"), a.optString("id") == audSel) { pickOut("audio", a.optString("id")) } }, onPicked = close)
+            }
             "audio" -> DialogBox(tr("Аудиодорожка", "Audio track"), close) {
                 OptionList(audio.map { t -> Opt(t.second, t.third) { send("aid", "id", t.first) } }, onPicked = close)
             }
