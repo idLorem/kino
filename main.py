@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.18"
+APP_VERSION = "1.0.19"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -7443,6 +7443,7 @@ class PcPlayer:
         self.f = None
         self.web = None
         self.vsel = {}
+        self.vlog = False
         self.rid = 0
         self.st = {"active": False}
 
@@ -7475,10 +7476,15 @@ class PcPlayer:
         cat = d.get("information", {}).get("category", {})
         out = {"Audio": [], "Subtitle": []}
         for k, v in cat.items():
-            m = re.fullmatch(r"Stream (\d+)", k)
-            if m and v.get("Type") in out:
+            m = re.fullmatch(r"\D*(\d+)", k)
+            ty = str(v.get("Type") or v.get("Тип") or "").lower()
+            ty = "Audio" if ty.startswith(("audio", "аудио")) else "Subtitle" if ty.startswith(("subt", "субт")) else ""
+            if m and ty:
                 name = " · ".join(str(x) for x in (v.get("Description"), v.get("Language"), v.get("Codec")) if x)
-                out[v["Type"]].append({"id": int(m.group(1)), "title": name or "#" + m.group(1), "sel": False})
+                out[ty].append({"id": int(m.group(1)), "title": name or "#" + m.group(1), "sel": False})
+        if not out["Audio"] and d.get("length") and not self.vlog:
+            self.vlog = True
+            _log("vlc tracks empty: " + json.dumps(d.get("information"), ensure_ascii=False)[:1500])
         for lst in out.values():
             lst.sort(key=lambda t: t["id"])
         if out["Audio"]:
@@ -7642,6 +7648,7 @@ class PcPlayer:
             self.kind = kind
             self.web = web
             self.vsel = {}
+            self.vlog = False
             self.f = None
             self.ready = False
             self.st = {"active": True, "id": item_id, "fid": fid, "title": str(view.get("title") or ""), "pos": max(0, pos), "dur": 0,
