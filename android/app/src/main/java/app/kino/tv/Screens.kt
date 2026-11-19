@@ -324,30 +324,50 @@ fun HomeScreen(
         base.sortedWith(compareByDescending<Item> { it.pinned > 0 }.thenByDescending { if (it.pinned > 0) it.pinned else it.added })
     }
     val cp = compact()
+    val tvDev = Prefs.isTv(LocalContext.current)
+    var tabMenu by remember { mutableStateOf(false) }
+    if (tabMenu) {
+        androidx.compose.ui.window.Dialog(onDismissRequest = { tabMenu = false }) {
+            Column(
+                Modifier.clip(RoundedCornerShape(22.dp)).background(Color(0xF2141416)).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Pill(tr("Не просмотрено", "Not watched"), tab == Tab.Unwatched, { onTab(Tab.Unwatched); tabMenu = false }, modifier = Modifier.fillMaxWidth())
+                Pill(tr("Просмотрено", "Watched"), tab == Tab.Watched, { onTab(Tab.Watched); tabMenu = false }, modifier = Modifier.fillMaxWidth())
+                Pill(tr("Скрытое", "Hidden"), tab == Tab.Hidden, { onTab(Tab.Hidden); tabMenu = false }, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
     Backdrop {
         Column(Modifier.fillMaxSize().padding(start = if (cp) 14.dp else 48.dp, end = if (cp) 14.dp else 48.dp, top = if (cp) 14.dp else 28.dp)) {
             Row(
-                Modifier.then(if (cp) Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()) else Modifier),
+                Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Logo(if (cp) 30 else 40)
                 Spacer(Modifier.width(if (cp) 6.dp else 10.dp))
-                Pill(tr("Не просмотрено", "Not watched"), tab == Tab.Unwatched, { onTab(Tab.Unwatched) }, hPad = 16.dp)
-                Pill(tr("Просмотрено", "Watched"), tab == Tab.Watched, { onTab(Tab.Watched) }, hPad = 16.dp)
-                Pill(tr("Скрытое", "Hidden"), tab == Tab.Hidden, { onTab(Tab.Hidden) }, hPad = 16.dp)
-                if (!cp) Spacer(Modifier.weight(1f))
-                if (update != null) {
+                if (!tvDev && pcActive) Pill(tr("Пульт ПК", "PC remote"), selected = true, onClick = onPcRemote, hPad = 16.dp)
+                if (!tvDev && tvActive) Pill(tr("Пульт ТВ", "TV remote"), selected = true, onClick = onTvRemote, hPad = 16.dp)
+                if (cp && (pcActive || tvActive)) {
+                    Spacer(Modifier.weight(1f))
+                    Pill("", onClick = { tabMenu = true }, hPad = 10.dp, leading = { c -> ListIcon(c, 20.dp) })
+                } else {
                     Pill(
-                        if (updProgress >= 0) tr("Загрузка ", "Downloading ") + updProgress + "%" else if (updReady) tr("Установить v", "Install v") + update.version else tr("Скачать v", "Download v") + update.version,
-                        onClick = { if (updProgress < 0) onUpdate() },
-                        hPad = 16.dp,
+                        when (tab) { Tab.Unwatched -> tr("Не просмотрено", "Not watched"); Tab.Watched -> tr("Просмотрено", "Watched"); Tab.Hidden -> tr("Скрытое", "Hidden") } + "  ▾",
+                        onClick = { tabMenu = true },
+                        modifier = if (cp) Modifier.weight(1f) else Modifier,
+                        hPad = if (cp) 8.dp else 16.dp,
                     )
+                    if (!cp) Spacer(Modifier.weight(1f))
                 }
-                if (pcActive) Pill(tr("Пульт ПК", "PC remote"), selected = true, onClick = onPcRemote, hPad = 16.dp)
-                if (tvActive) Pill(tr("Пульт ТВ", "TV remote"), selected = true, onClick = onTvRemote, hPad = 16.dp)
-                Pill(tr("Обновить", "Refresh"), onClick = onRefresh, hPad = 16.dp)
-                Pill(tr("Настройки", "Settings"), onClick = onSettings, hPad = 16.dp)
+                Pill("", onClick = onRefresh, hPad = if (cp) 10.dp else 12.dp, leading = { c -> RefreshIcon(c, 20.dp) })
+                Pill("", onClick = onSettings, hPad = if (cp) 10.dp else 12.dp, leading = { c ->
+                    Box {
+                        GearIcon(c, 20.dp)
+                        if (update != null) Box(Modifier.align(Alignment.TopEnd).size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(0xFFFF453A)))
+                    }
+                })
             }
             Spacer(Modifier.height(20.dp))
             if (error.isNotEmpty()) {
@@ -464,7 +484,7 @@ fun DetailScreen(
             }
             if (cur.files.isNotEmpty()) {
                 val pcf = cur.files.firstOrNull { cur.resumeFid >= 0 && it.fid == cur.resumeFid } ?: cur.files.firstOrNull { !it.watched } ?: cur.files[0]
-                Pill(tr("Играть на ПК", "Play on PC"), onClick = { onPlayPc(cur, pcf) }, modifier = Modifier.width(bw * 2 + 12.dp))
+                Pill(tr("Запустить на ПК", "Start on PC"), onClick = { onPlayPc(cur, pcf) }, modifier = Modifier.width(bw * 2 + 12.dp))
             }
             if (cur.resumeFid >= 0 && !ghost) {
                 Pill(

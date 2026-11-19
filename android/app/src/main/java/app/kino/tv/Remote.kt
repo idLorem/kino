@@ -6,6 +6,9 @@ import android.media.tv.TvContract
 import android.media.tv.TvInputInfo
 import android.media.tv.TvInputManager
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -124,6 +127,8 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
     var st by remember { mutableStateOf<JSONObject?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
     var scrub by remember { mutableStateOf<Long?>(null) }
+    var vscrub by remember { mutableStateOf<Int?>(null) }
+    var vbarW by remember { mutableIntStateOf(1) }
     var barW by remember { mutableIntStateOf(1) }
     var lost by remember { mutableIntStateOf(0) }
     var wasActive by remember { mutableStateOf(false) }
@@ -143,7 +148,7 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
             } else {
                 lost++
             }
-            delay(if (tv) 500 else 1000)
+            delay(250)
         }
     }
 
@@ -181,6 +186,7 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
     val subs = s?.tracks("sub") ?: emptyList()
 
     Backdrop {
+        val pid = s?.optString("id") ?: ""
         Column(
             Modifier
                 .fillMaxSize()
@@ -192,6 +198,10 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
                 BackPill(onBack = onBack)
                 if (onHdmi != null) Pill(tr("Вход HDMI", "HDMI input"), onClick = onHdmi, hPad = 16.dp)
                 if (monList.isNotEmpty() || audList.isNotEmpty()) Pill(tr("Вывод", "Output"), onClick = { dialog = "out" }, hPad = 16.dp)
+                if (active && s?.optBoolean("tracks", true) == true) {
+                    Spacer(Modifier.weight(1f))
+                    Pill("", onClick = { dialog = "set" }, hPad = 12.dp, leading = { c -> GearIcon(c, 20.dp) })
+                }
             }
             if (s == null) {
                 Text(if (lost > 2) tr("Нет связи с компьютером", "Can't reach the PC") else tr("Загрузка…", "Loading…"), color = C.muted, fontSize = 18.sp)
@@ -199,6 +209,14 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
                 Text(if (wasActive) if (tv) tr("Воспроизведение на ТВ закончилось", "Playback on the TV has ended") else tr("Воспроизведение на ПК закончилось", "Playback on the PC has ended") else tr("На ПК ничего не играет", "Nothing is playing on the PC"), color = C.muted, fontSize = 18.sp)
                 if (wasActive) Pill(tr("Обновить список", "Refresh list"), onClick = { onRefresh() }, hPad = 16.dp)
             } else {
+                if (cp && pid.isNotEmpty()) {
+                    coil.compose.AsyncImage(
+                        model = conn.posterUrl(pid),
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp)).background(androidx.compose.ui.graphics.Color(0xFF111111)),
+                    )
+                }
                 Text(s.optString("title"), color = C.text, fontSize = if (cp) 20.sp else 28.sp, fontWeight = FontWeight.Bold, maxLines = 2)
                 Text(if (tv) tr("Играет на ТВ", "Playing on the TV") else tr("Играет на ПК", "Playing on the PC"), color = C.muted, fontSize = 14.sp)
                 val shown = scrub ?: pos
@@ -240,21 +258,44 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
                     Pill("−30", onClick = { send("seek", "ms", -30_000) }, hPad = 14.dp)
                     Pill("−10", onClick = { send("seek", "ms", -10_000) }, hPad = 14.dp)
-                    Pill("", selected = true, onClick = { send("pause", "v", !paused) }, hPad = 24.dp, leading = { c -> if (paused) PlayGlyph(c, 18.dp) else PauseGlyph(c, 18.dp) })
+                    Pill("", selected = true, onClick = { send("pause", "v", !paused) }, hPad = 32.dp, leading = { c -> if (paused) PlayGlyph(c, 26.dp) else PauseGlyph(c, 26.dp) })
                     Pill("+10", onClick = { send("seek", "ms", 10_000) }, hPad = 14.dp)
                     Pill("+30", onClick = { send("seek", "ms", 30_000) }, hPad = 14.dp)
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    Pill("−", onClick = { send("vol", "v", vol - 10) }, hPad = 18.dp)
-                    Text(tr("Громкость ", "Volume ") + vol + "%", color = C.text, fontSize = 16.sp)
-                    Pill("+", onClick = { send("vol", "v", vol + 10) }, hPad = 18.dp)
+                val shownVol = vscrub ?: vol
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(tr("Громкость", "Volume"), color = C.muted, fontSize = 14.sp)
+                    Spacer(Modifier.weight(1f))
+                    Text("$shownVol%", color = if (vscrub != null) C.good else C.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
-                    if (s.optBoolean("tracks", true)) {
-                        Pill(tr("Аудио", "Audio"), onClick = { dialog = "audio" }, hPad = 16.dp)
-                        Pill(tr("Субтитры", "Subtitles"), onClick = { dialog = "sub" }, hPad = 16.dp)
+                androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(36.dp)
+                        .onSizeChanged { vbarW = it.width.coerceAtLeast(1) }
+                        .pointerInput(Unit) {
+                            detectTapGestures(onTap = { o -> send("vol", "v", (100 * o.x / vbarW.toFloat()).toInt().coerceIn(0, 100)) })
+                        }
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onDragStart = { o -> vscrub = (100 * o.x / vbarW.toFloat()).toInt().coerceIn(0, 100) },
+                                onDragEnd = { vscrub?.let { send("vol", "v", it) }; vscrub = null },
+                                onDragCancel = { vscrub = null },
+                                onHorizontalDrag = { c, _ -> vscrub = (100 * c.position.x / vbarW.toFloat()).toInt().coerceIn(0, 100) },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(20.dp)) {
+                        val th = 6.dp.toPx()
+                        val y = (size.height - th) / 2f
+                        val rr = th / 2f
+                        val x = size.width * shownVol.coerceIn(0, 100) / 100f
+                        val col = if (vscrub != null) C.good else C.white
+                        drawRoundRect(androidx.compose.ui.graphics.Color(0x33FFFFFF), androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Size(size.width, th), androidx.compose.ui.geometry.CornerRadius(rr, rr))
+                        drawRoundRect(col, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Size(x, th), androidx.compose.ui.geometry.CornerRadius(rr, rr))
+                        drawCircle(col, 8.dp.toPx(), androidx.compose.ui.geometry.Offset(x.coerceIn(8.dp.toPx(), size.width - 8.dp.toPx()), size.height / 2f))
                     }
-                    Pill(tr("Стоп", "Stop"), onClick = { send("stop") }, hPad = 16.dp)
                 }
             }
         }
@@ -276,6 +317,10 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
             "aud" -> DialogBox(tr("Аудиовыход", "Audio output"), close) {
                 val def = Opt(tr("По умолчанию", "Default"), audSel.isEmpty()) { pickOut("audio", "") }
                 OptionList(listOf(def) + audList.map { a -> Opt(a.optString("name"), a.optString("id") == audSel) { pickOut("audio", a.optString("id")) } }, onPicked = close)
+            }
+            "set" -> DialogBox(tr("Настройки", "Settings"), close) {
+                Pill(tr("Аудио", "Audio"), onClick = { dialog = "audio" }, modifier = Modifier.fillMaxWidth())
+                Pill(tr("Субтитры", "Subtitles"), onClick = { dialog = "sub" }, modifier = Modifier.fillMaxWidth())
             }
             "audio" -> DialogBox(tr("Аудиодорожка", "Audio track"), close) {
                 OptionList(audio.map { t -> Opt(t.second, t.third) { send("aid", "id", t.first) } }, onPicked = close)

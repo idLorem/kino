@@ -221,6 +221,18 @@ fun PlayerScreen(
     var audioSel by remember { mutableIntStateOf(-1) }
     var textSel by remember { mutableIntStateOf(-1) }
     var subsAdded by remember { mutableStateOf(false) }
+    fun saveAudio(id: Int) {
+        val i = audioList.indexOfFirst { it.first == id }
+        if (i < 0) return
+        Prefs.setStr(ctx, "ta_" + item.id, audioList[i].second)
+        Prefs.setStr(ctx, "tai_" + item.id, i.toString())
+    }
+    fun saveText(id: Int) {
+        val i = textList.indexOfFirst { it.first == id }
+        if (i < 0) return
+        Prefs.setStr(ctx, "ts_" + item.id, if (id < 0) "-" else textList[i].second)
+        Prefs.setStr(ctx, "tsi_" + item.id, i.toString())
+    }
     var audioApplied by remember { mutableStateOf(false) }
     var textApplied by remember { mutableStateOf(false) }
 
@@ -233,6 +245,7 @@ fun PlayerScreen(
     var scrubStamp by remember { mutableLongStateOf(0L) }
     var dragging by remember { mutableStateOf(false) }
     var hud by remember { mutableStateOf("") }
+    var muted by remember { mutableStateOf(false) }
     var gain by remember { mutableIntStateOf(Prefs.str(ctx, "gain", "100").toIntOrNull()?.coerceIn(0, 200) ?: 100) }
     var rate by remember { mutableFloatStateOf(1f) }
     var delayMs by remember { mutableIntStateOf(Prefs.str(ctx, "adelay", "0").toIntOrNull() ?: 0) }
@@ -440,17 +453,18 @@ fun PlayerScreen(
                         "seekto" -> seekTo(c.optLong("ms"))
                         "pause" -> if (c.optBoolean("v") == mp.isPlaying()) { if (c.optBoolean("v")) mp.pause() else mp.play() }
                         "vol" -> { gain = c.optInt("v", gain).coerceIn(0, 200); Prefs.setStr(ctx, "gain", gain.toString()) }
-                        "aid" -> { mp.setAudioTrack(c.optInt("id")); audioSel = c.optInt("id") }
+                        "aid" -> { mp.setAudioTrack(c.optInt("id")); audioSel = c.optInt("id"); saveAudio(audioSel) }
                         "sid" -> {
                             val id = c.optInt("id").takeIf { v -> textList.any { it.first == v } } ?: -1
                             mp.setSpuTrack(id)
                             textSel = id
+                            saveText(id)
                         }
                         "stop" -> leave()
                     }
                 }
             }
-            delay(if (watch) 500 else 2000)
+            delay(if (watch) 250 else 2000)
         }
     }
 
@@ -473,7 +487,7 @@ fun PlayerScreen(
         if (started) mp.setRate(rate)
     }
 
-    LaunchedEffect(audioSel, tracksTick, started, gain) {
+    LaunchedEffect(audioSel, tracksTick, started, gain, muted) {
         if (started) {
             var ch = 2
             try {
@@ -487,7 +501,7 @@ fun PlayerScreen(
                     } finally { m.release() }
                 }
             } catch (_: Exception) { }
-            mp.setVolume(((if (ch > 2) 200 else 100) * gain / 100).coerceIn(0, 200))
+            mp.setVolume(if (muted) 0 else ((if (ch > 2) 200 else 100) * gain / 100).coerceIn(0, 200))
         }
     }
 
@@ -500,6 +514,7 @@ fun PlayerScreen(
             audioApplied = true
             val saved = Prefs.str(ctx, "ta_" + item.id, "")
             val pick = audioList.firstOrNull { saved.isNotEmpty() && it.second == saved }
+                ?: if (saved.isNotEmpty()) audioList.getOrNull(Prefs.str(ctx, "tai_" + item.id, "").toIntOrNull() ?: -1) else null
                 ?: Prefs.str(ctx, "aud", "auto").takeIf { it != "auto" }?.let { l -> audioList.firstOrNull { langMatch(it.second, l) } }
             if (pick != null) {
                 mp.setAudioTrack(pick.first)
@@ -516,7 +531,7 @@ fun PlayerScreen(
             val pref = Prefs.str(ctx, "sub", "off")
             val pick: Pair<Int, String>? = when {
                 saved == "-" -> Pair(-1, "")
-                saved.isNotEmpty() -> textList.firstOrNull { it.second == saved }
+                saved.isNotEmpty() -> textList.firstOrNull { it.second == saved } ?: textList.getOrNull(Prefs.str(ctx, "tsi_" + item.id, "").toIntOrNull() ?: -1)
                 pref == "off" -> Pair(-1, "")
                 else -> textList.firstOrNull { langMatch(it.second, pref) }
             }
@@ -778,6 +793,7 @@ fun PlayerScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.align(Alignment.CenterHorizontally)) {
                     Pill(tr("Звук −", "Vol −"), onClick = { gain = (gain - 10).coerceAtLeast(0); Prefs.setStr(ctx, "gain", gain.toString()); hud = tr("Звук ", "Level ") + gain + "%"; poke() }, hPad = 16.dp)
                     Pill("", selected = true, onClick = { togglePlay() }, hPad = 26.dp, focusRequester = playFr, leading = { c -> if (playing) PauseGlyph(c, 18.dp) else PlayGlyph(c, 18.dp) })
+                    Pill("", onClick = { muted = !muted; poke() }, hPad = 12.dp, leading = { c -> MuteIcon(c, 20.dp, muted) })
                     Pill(tr("Звук +", "Vol +"), onClick = { gain = (gain + 10).coerceAtMost(200); Prefs.setStr(ctx, "gain", gain.toString()); hud = tr("Звук ", "Level ") + gain + "%"; poke() }, hPad = 16.dp)
                 }
             }
@@ -793,10 +809,16 @@ fun PlayerScreen(
                             Opt(t.second.ifEmpty { tr("Дорожка ", "Track ") + t.first }, t.first == audioSel) {
                                 mp.setAudioTrack(t.first)
                                 audioSel = t.first
-                                Prefs.setStr(ctx, "ta_" + item.id, t.second)
+                                saveAudio(t.first)
                             }
                         },
                         onPicked = close,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Pill(
+                        tr("Синхронизация звука", "Audio sync") + if (delayMs != 0) ": " + (if (delayMs > 0) "+" else "") + delayMs + " " + tr("мс", "ms") else "",
+                        onClick = { dialog = "sync" },
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(Modifier.height(10.dp))
                     Pill(
@@ -823,10 +845,8 @@ fun PlayerScreen(
                     }
                     Pill(tr("Аудио", "Audio"), onClick = { dialog = "audio" }, modifier = Modifier.fillMaxWidth(), focusRequester = fr)
                     Pill(tr("Субтитры", "Subtitles"), onClick = { dialog = "text" }, modifier = Modifier.fillMaxWidth())
-                    Pill(tr("Настройки субтитров", "Subtitle settings"), onClick = { dialog = "style" }, modifier = Modifier.fillMaxWidth())
                     Pill(tr("Экран", "Screen"), onClick = { dialog = "scale" }, modifier = Modifier.fillMaxWidth())
                     Pill(if (rate == 1f) tr("Скорость", "Speed") else tr("Скорость ", "Speed ") + rate.toString() + "×", onClick = { dialog = "speed" }, modifier = Modifier.fillMaxWidth())
-                    Pill(tr("Синхронизация звука", "Audio sync"), onClick = { dialog = "sync" }, modifier = Modifier.fillMaxWidth())
                 }
                 "text" -> DialogBox(tr("Субтитры", "Subtitles"), close) {
                     OptionList(
@@ -835,13 +855,32 @@ fun PlayerScreen(
                             Opt(if (off) tr("Выключены", "Off") else t.second.ifEmpty { tr("Дорожка ", "Track ") + t.first }, t.first == textSel) {
                                 mp.setSpuTrack(t.first)
                                 textSel = t.first
-                                Prefs.setStr(ctx, "ts_" + item.id, if (off) "-" else t.second)
+                                saveText(t.first)
                             }
                         },
                         onPicked = close,
                     )
+                    Spacer(Modifier.height(10.dp))
+                    Pill(tr("Настройки субтитров", "Subtitle settings"), onClick = { dialog = "style" }, modifier = Modifier.fillMaxWidth())
                 }
-                "scale" -> DialogBox(tr("Режим экрана", "Screen mode"), close) {
+                "scale" -> DialogBox(tr("Экран", "Screen"), close) {
+                    val res = remember(tracksTick) {
+                        var w = 0
+                        var h = 0
+                        try {
+                            val m = mp.getMedia()
+                            if (m != null) {
+                                try {
+                                    for (i in 0 until m.trackCount) {
+                                        val t = m.getTrack(i)
+                                        if (t is IMedia.VideoTrack) { w = t.width; h = t.height; break }
+                                    }
+                                } finally { m.release() }
+                            }
+                        } catch (_: Exception) { }
+                        if (w > 0 && h > 0) "$w×$h" else "—"
+                    }
+                    Text(tr("Разрешение файла: ", "File resolution: ") + res, color = C.muted, fontSize = 16.sp)
                     OptionList(
                         SCALES.indices.map { i ->
                             Opt(scaleLabel(i), i == scaleIdx) {

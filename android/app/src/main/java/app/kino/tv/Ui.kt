@@ -304,3 +304,67 @@ fun subPosLabel(v: String): String = when (v) { "0" -> tr("Низко", "Low"); 
 fun subBgLabel(v: String): String = "$v%"
 
 fun nextOf(cur: String, all: List<String>): String = all[(all.indexOf(cur) + 1) % all.size]
+
+@Composable
+fun RefreshIcon(color: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val sw = w * 0.11f
+        drawArc(color, 40f, 290f, false, Offset(w * 0.16f, w * 0.16f), androidx.compose.ui.geometry.Size(w * 0.68f, w * 0.68f), style = Stroke(sw, cap = StrokeCap.Round))
+        val p = Path()
+        p.moveTo(w * 0.62f, w * 0.06f)
+        p.lineTo(w * 0.86f, w * 0.30f)
+        p.lineTo(w * 0.52f, w * 0.36f)
+        p.close()
+        drawPath(p, color)
+    }
+}
+
+@Composable
+fun GearIcon(color: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val c = Offset(w / 2f, w / 2f)
+        val sw = w * 0.13f
+        for (i in 0 until 8) {
+            val a = Math.toRadians(i * 45.0)
+            val dx = Math.cos(a).toFloat()
+            val dy = Math.sin(a).toFloat()
+            drawLine(color, Offset(c.x + dx * w * 0.34f, c.y + dy * w * 0.34f), Offset(c.x + dx * w * 0.46f, c.y + dy * w * 0.46f), strokeWidth = sw, cap = StrokeCap.Round)
+        }
+        drawCircle(color, w * 0.28f, c, style = Stroke(sw))
+        drawCircle(color, w * 0.08f, c)
+    }
+}
+
+@Composable
+fun ListIcon(color: Color, size: Dp) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val sw = w * 0.11f
+        for (y in listOf(0.24f, 0.5f, 0.76f)) drawLine(color, Offset(w * 0.14f, w * y), Offset(w * 0.86f, w * y), strokeWidth = sw, cap = StrokeCap.Round)
+    }
+}
+
+@Composable
+fun MuteIcon(color: Color, size: Dp, muted: Boolean) {
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width
+        val sw = w * 0.1f
+        val p = Path()
+        p.moveTo(w * 0.10f, w * 0.38f)
+        p.lineTo(w * 0.30f, w * 0.38f)
+        p.lineTo(w * 0.52f, w * 0.18f)
+        p.lineTo(w * 0.52f, w * 0.82f)
+        p.lineTo(w * 0.30f, w * 0.62f)
+        p.lineTo(w * 0.10f, w * 0.62f)
+        p.close()
+        drawPath(p, color)
+        if (muted) {
+            drawLine(color, Offset(w * 0.66f, w * 0.38f), Offset(w * 0.92f, w * 0.62f), strokeWidth = sw, cap = StrokeCap.Round)
+            drawLine(color, Offset(w * 0.92f, w * 0.38f), Offset(w * 0.66f, w * 0.62f), strokeWidth = sw, cap = StrokeCap.Round)
+        } else {
+            drawArc(color, -45f, 90f, false, Offset(w * 0.40f, w * 0.30f), androidx.compose.ui.geometry.Size(w * 0.40f, w * 0.40f), style = Stroke(sw, cap = StrokeCap.Round))
+        }
+    }
+}
