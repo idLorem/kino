@@ -12,6 +12,8 @@ A catalog for local movies and series on Windows, with an Android TV and phone c
 
 ### Features
 
+<p align="center"><img src="docs/images/android-tv.jpg" width="560"> <img src="docs/images/android-phone.jpg" width="190"></p>
+
 - Auto-fetches posters, descriptions and ratings (IMDb, Kinopoisk, TMDB, Letterboxd)
 - Not watched, Watchlist and Watched tabs, search, sorting and filters
 - Import a watchlist from a public Letterboxd profile
@@ -19,8 +21,10 @@ A catalog for local movies and series on Windows, with an Android TV and phone c
 - English and Russian interface with matching metadata (OMDb and IMDb for English, Kinopoisk for Russian)
 - Access another PC's library over LAN or remotely via the built-in AmneziaWG VPN
 - Android TV and phone app with audio and subtitle selection and playback resume
-- "Play on PC" from the TV or phone app: the movie starts in mpv on the PC (HDMI to the TV) and the phone works as a remote
-- Phone as a remote while the TV app plays: a "TV remote" button appears on the phone (seek, pause, volume, audio, subtitles, stop), commands go through the PC
+- "Start on PC" from the TV or phone app: the movie starts in mpv on the PC (HDMI to the TV) and the phone works as a remote
+- Phone as a remote while the TV app plays: poster, seek, pause, volume slider, audio and subtitles
+- Audio and subtitle choice is remembered per series
+- A red dot on the settings icon when a new version is out
 
 ### Install
 
@@ -50,6 +54,8 @@ Settings → Letterboxd → enter your username (the watchlist must be public).
 
 ### Возможности
 
+<p align="center"><img src="docs/images/android-tv.jpg" width="560"> <img src="docs/images/android-phone.jpg" width="190"></p>
+
 - Автоподбор постеров, описаний и рейтингов (IMDb, Кинопоиск, TMDB, Letterboxd)
 - Вкладки «Не просмотрено», «Хочу посмотреть» и «Просмотрено», поиск, сортировка и фильтры
 - Импорт списка «Хочу посмотреть» из открытого профиля Letterboxd
@@ -58,7 +64,9 @@ Settings → Letterboxd → enter your username (the watchlist must be public).
 - Доступ к библиотеке другого ПК по локальной сети или через встроенный AmneziaWG VPN
 - Приложение для Android TV и телефона с выбором аудио и субтитров и продолжением просмотра
 - «Запустить на ПК» из приложения на ТВ или телефоне: фильм запускается в mpv на компьютере (HDMI к ТВ), телефон работает как пульт
-- Телефон как пульт, пока ТВ-приложение играет фильм: на телефоне появляется кнопка «Пульт ТВ» (перемотка, пауза, громкость, аудио, субтитры, стоп), команды идут через ПК
+- Телефон как пульт, пока ТВ-приложение играет фильм: постер, перемотка, пауза, слайдер громкости, аудио и субтитры
+- Аудио и субтитры запоминаются для всего сериала
+- Красная точка на значке настроек, когда вышла новая версия
 
 ### Установка
 
