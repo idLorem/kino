@@ -410,6 +410,50 @@ fun PlayerScreen(
         if (started) readTracks()
     }
 
+    val tvDevice = remember { Prefs.isTv(ctx) }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            if (tvDevice) Thread { kotlinx.coroutines.runBlocking { Pc.report(conn, JSONObject().put("active", false)) } }.start()
+        }
+    }
+
+    LaunchedEffect(gen) {
+        if (!tvDevice) return@LaunchedEffect
+        fun tl(l: List<Pair<Int, String>>, sel: Int) = org.json.JSONArray().also { a ->
+            l.forEach { a.put(JSONObject().put("id", it.first).put("title", it.second.ifEmpty { tr("Дорожка ", "Track ") + it.first }).put("sel", it.first == sel)) }
+        }
+        var watch = false
+        while (true) {
+            if (started) {
+                val body = JSONObject().put("active", true).put("title", item.title)
+                if (watch) {
+                    body.put("id", item.id).put("fid", file.fid).put("pos", pos).put("dur", dur).put("pause", !playing).put("vol", gain)
+                        .put("audio", tl(audioList, audioSel)).put("sub", tl(textList.filter { it.first >= 0 }, textSel))
+                }
+                val rep = Pc.report(conn, body)
+                watch = rep?.optBoolean("watch") == true
+                val cmds = rep?.optJSONArray("cmds")
+                for (i in 0 until (cmds?.length() ?: 0)) {
+                    val c = cmds!!.getJSONObject(i)
+                    when (c.optString("op")) {
+                        "seek" -> seekRel(c.optLong("ms"))
+                        "seekto" -> seekTo(c.optLong("ms"))
+                        "pause" -> if (c.optBoolean("v") == mp.isPlaying()) { if (c.optBoolean("v")) mp.pause() else mp.play() }
+                        "vol" -> { gain = c.optInt("v", gain).coerceIn(0, 200); Prefs.setStr(ctx, "gain", gain.toString()) }
+                        "aid" -> { mp.setAudioTrack(c.optInt("id")); audioSel = c.optInt("id") }
+                        "sid" -> {
+                            val id = c.optInt("id").takeIf { v -> textList.any { it.first == v } } ?: -1
+                            mp.setSpuTrack(id)
+                            textSel = id
+                        }
+                        "stop" -> leave()
+                    }
+                }
+            }
+            delay(if (watch) 500 else 2000)
+        }
+    }
+
     LaunchedEffect(started) {
         if (started && !subsAdded) {
             subsAdded = true

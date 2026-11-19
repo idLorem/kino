@@ -277,6 +277,8 @@ fun HomeScreen(
     onSettings: () -> Unit,
     pcActive: Boolean,
     onPcRemote: () -> Unit,
+    tvActive: Boolean,
+    onTvRemote: () -> Unit,
     update: Rel?,
     updProgress: Int,
     updReady: Boolean,
@@ -343,6 +345,7 @@ fun HomeScreen(
                     )
                 }
                 if (pcActive) Pill(tr("Пульт ПК", "PC remote"), selected = true, onClick = onPcRemote, hPad = 16.dp)
+                if (tvActive) Pill(tr("Пульт ТВ", "TV remote"), selected = true, onClick = onTvRemote, hPad = 16.dp)
                 Pill(tr("Обновить", "Refresh"), onClick = onRefresh, hPad = 16.dp)
                 Pill(tr("Настройки", "Settings"), onClick = onSettings, hPad = 16.dp)
             }

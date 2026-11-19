@@ -39,8 +39,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 object Pc {
-    suspend fun state(c: Conn): JSONObject? = try {
-        Net.get(c, "/api/pc/state")
+    suspend fun state(c: Conn, tv: Boolean = false, watch: Boolean = false): JSONObject? = try {
+        Net.get(c, if (tv) "/api/tv/state" + (if (watch) "?w=1" else "") else "/api/pc/state")
     } catch (_: Exception) {
         null
     }
@@ -64,10 +64,16 @@ object Pc {
         null
     }
 
-    suspend fun cmd(c: Conn, op: String, key: String? = null, v: Any? = null): JSONObject? = try {
-        val b = JSONObject().put("op", op)
+    suspend fun cmd(c: Conn, op: String, key: String? = null, v: Any? = null, tv: Boolean = false, dev: String = ""): JSONObject? = try {
+        val b = JSONObject().put("op", op).put("dev", dev)
         if (key != null) b.put(key, v)
-        Net.post(c, "/api/pc/cmd", b)
+        Net.post(c, if (tv) "/api/tv/cmd" else "/api/pc/cmd", b)
+    } catch (_: Exception) {
+        null
+    }
+
+    suspend fun report(c: Conn, body: JSONObject): JSONObject? = try {
+        Net.post(c, "/api/tv/report", body)
     } catch (_: Exception) {
         null
     }
@@ -112,7 +118,7 @@ private fun JSONObject.tracks(key: String): List<Triple<Int, String, Boolean>> {
 }
 
 @Composable
-fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefresh: () -> Unit) {
+fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefresh: () -> Unit, tv: Boolean = false) {
     BackHandler { onBack() }
     val scope = rememberCoroutineScope()
     var st by remember { mutableStateOf<JSONObject?>(null) }
@@ -125,11 +131,11 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
     var outBusy by remember { mutableStateOf(false) }
     val cp = compact()
 
-    LaunchedEffect(Unit) { outs = Pc.outputs(conn) }
+    LaunchedEffect(Unit) { if (!tv) outs = Pc.outputs(conn) }
 
     LaunchedEffect(Unit) {
         while (true) {
-            val r = Pc.state(conn)
+            val r = Pc.state(conn, tv, true)
             if (r != null) {
                 st = r
                 lost = 0
@@ -137,13 +143,13 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
             } else {
                 lost++
             }
-            delay(1000)
+            delay(if (tv) 500 else 1000)
         }
     }
 
     fun send(op: String, key: String? = null, v: Any? = null) {
         scope.launch {
-            val r = Pc.cmd(conn, op, key, v)
+            val r = Pc.cmd(conn, op, key, v, tv, st?.optString("dev") ?: "")
             if (r != null && r.optBoolean("ok") && r.has("pos")) st = r
         }
     }
@@ -190,11 +196,11 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
             if (s == null) {
                 Text(if (lost > 2) tr("Нет связи с компьютером", "Can't reach the PC") else tr("Загрузка…", "Loading…"), color = C.muted, fontSize = 18.sp)
             } else if (!active) {
-                Text(if (wasActive) tr("Воспроизведение на ПК закончилось", "Playback on the PC has ended") else tr("На ПК ничего не играет", "Nothing is playing on the PC"), color = C.muted, fontSize = 18.sp)
+                Text(if (wasActive) if (tv) tr("Воспроизведение на ТВ закончилось", "Playback on the TV has ended") else tr("Воспроизведение на ПК закончилось", "Playback on the PC has ended") else tr("На ПК ничего не играет", "Nothing is playing on the PC"), color = C.muted, fontSize = 18.sp)
                 if (wasActive) Pill(tr("Обновить список", "Refresh list"), onClick = { onRefresh() }, hPad = 16.dp)
             } else {
                 Text(s.optString("title"), color = C.text, fontSize = if (cp) 20.sp else 28.sp, fontWeight = FontWeight.Bold, maxLines = 2)
-                Text(tr("Играет на ПК", "Playing on the PC"), color = C.muted, fontSize = 14.sp)
+                Text(if (tv) tr("Играет на ТВ", "Playing on the TV") else tr("Играет на ПК", "Playing on the PC"), color = C.muted, fontSize = 14.sp)
                 val shown = scrub ?: pos
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(fmtTime(shown), color = if (scrub != null) C.good else C.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)

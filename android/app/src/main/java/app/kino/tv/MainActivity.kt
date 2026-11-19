@@ -86,6 +86,8 @@ fun KinoApp() {
     var settings by remember { mutableStateOf(false) }
     var pcRemote by remember { mutableStateOf(false) }
     var pcActive by remember { mutableStateOf(false) }
+    var tvActive by remember { mutableStateOf(false) }
+    var remoteTv by remember { mutableStateOf(false) }
     var hdmiPick by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
     var update by remember { mutableStateOf<Rel?>(null) }
     var updStatus by remember { mutableStateOf("") }
@@ -176,6 +178,7 @@ fun KinoApp() {
         val cc = conn
         while (cc != null && playing == null && !pcRemote) {
             pcActive = Pc.state(cc)?.optBoolean("active") == true
+            tvActive = !Prefs.isTv(ctx) && Pc.state(cc, true)?.optBoolean("active") == true
             delay(5000)
         }
     }
@@ -243,9 +246,10 @@ fun KinoApp() {
         androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
             PcRemoteScreen(
                 conn = c,
-                onBack = { pcRemote = false },
-                onHdmi = if (Prefs.isTv(ctx)) { { hdmiChoose() } } else null,
-                onRefresh = { pcRemote = false; load(false) },
+                onBack = { pcRemote = false; remoteTv = false },
+                onHdmi = if (Prefs.isTv(ctx) && !remoteTv) { { hdmiChoose() } } else null,
+                onRefresh = { pcRemote = false; remoteTv = false; load(false) },
+                tv = remoteTv,
             )
             hdmiPick?.let { list ->
                 DialogBox(tr("Вход HDMI", "HDMI input"), { hdmiPick = null }) {
@@ -297,7 +301,9 @@ fun KinoApp() {
         onRefresh = { load(true) },
         onSettings = { settings = true },
         pcActive = pcActive,
-        onPcRemote = { pcRemote = true },
+        onPcRemote = { remoteTv = false; pcRemote = true },
+        tvActive = tvActive,
+        onTvRemote = { remoteTv = true; pcRemote = true },
         update = update,
         updProgress = updProgress,
         updReady = updFile != null,

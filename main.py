@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.19"
+APP_VERSION = "1.0.20"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -7433,10 +7433,47 @@ def _pc_player(api):
     return ("mpv", m) if m else ("", "")
 
 
+class TvRelay:
+    TTL = 6
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.devs = {}
+        self.watch = 0
+
+    def state(self, watch=False):
+        now = time.time()
+        with self.lock:
+            if watch:
+                self.watch = now
+            live = [(v["ts"], k) for k, v in self.devs.items() if now - v["ts"] < self.TTL and v["st"].get("active")]
+            if not live:
+                return {"ok": True, "active": False}
+            k = max(live)[1]
+            return dict(self.devs[k]["st"], ok=True, dev=k)
+
+    def cmd(self, d):
+        with self.lock:
+            v = self.devs.get(str(d.get("dev") or ""))
+            if v and time.time() - v["ts"] < self.TTL:
+                v["q"] = (v["q"] + [d])[-20:]
+
+    def report(self, dev, d):
+        now = time.time()
+        with self.lock:
+            self.devs = {k: v for k, v in self.devs.items() if now - v["ts"] < 60}
+            v = self.devs.setdefault(dev, {"q": []})
+            v["st"], v["ts"] = d, now
+            q, v["q"] = v["q"], []
+            return {"ok": True, "cmds": q, "watch": now - self.watch < 3}
+
+
 class PcPlayer:
     def __init__(self, api):
         self.api = api
         self.lock = threading.Lock()
+        self.plock = threading.Lock()
+        self.pl = (0, ("", ""))
         self.proc = None
         self.kind = ""
         self.ready = False
@@ -7454,16 +7491,32 @@ class PcPlayer:
         self.rid += 1
         rid = self.rid
         f.write((json.dumps({"command": list(args), "request_id": rid}) + "\n").encode("utf-8"))
-        while True:
-            ln = f.readline()
-            if not ln:
-                raise OSError("pipe closed")
+        out = []
+
+        def rd():
             try:
-                d = json.loads(ln)
-            except ValueError:
-                continue
-            if d.get("request_id") == rid:
-                return d.get("data") if d.get("error") == "success" else None
+                while True:
+                    ln = f.readline()
+                    if not ln:
+                        return
+                    try:
+                        d = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if d.get("request_id") == rid:
+                        out.append(d)
+                        return
+            except (OSError, ValueError):
+                return
+        t = threading.Thread(target=rd, daemon=True)
+        t.start()
+        t.join(3)
+        if not out:
+            if t.is_alive() and self.proc is not None:
+                self.proc.kill()
+            raise OSError("pipe closed")
+        d = out[0]
+        return d.get("data") if d.get("error") == "success" else None
 
     def _vget(self, **params):
         sess, port, pw = self.web
@@ -7595,6 +7648,15 @@ class PcPlayer:
             p.kill()
 
     def play(self, item_id, fid, pos):
+        with self.plock:
+            return self._play(item_id, fid, pos)
+
+    def _player(self):
+        if time.time() - self.pl[0] > 10:
+            self.pl = (time.time(), _pc_player(self.api))
+        return self.pl[1]
+
+    def _play(self, item_id, fid, pos):
         kind, exe = _pc_player(self.api)
         if not kind:
             return {"ok": False, "error": "noplayer"}
@@ -7707,7 +7769,7 @@ class PcPlayer:
     def state(self):
         st = dict(self.st)
         st["ok"] = True
-        st["player"] = _pc_player(self.api)[0]
+        st["player"] = self._player()[0]
         return st
 
     def outputs(self):
@@ -7719,7 +7781,7 @@ class PcPlayer:
         aa = cfg.get("pc_audio") or ""
         return {"ok": True, "monitors": rows, "audio": [{"id": a["id"], "name": a["name"]} for a in aud],
                 "monitor": am if am in keys else "", "audioSel": aa if any(a["id"] == aa for a in aud) else "",
-                "player": _pc_player(self.api)[0]}
+                "player": self._player()[0]}
 
     def set_output(self, d):
         mons, aud = _outputs_scan(True)
@@ -7771,6 +7833,7 @@ class TvServer:
         self.lib = None
         self.rf = 0
         self.stopped = False
+        self.tv = TvRelay()
 
     def fill(self, budget=40):
         end = time.time() + budget
@@ -7807,9 +7870,9 @@ class TvServer:
                 if self.command != "HEAD":
                     self.wfile.write(body)
 
-            def _body(self):
+            def _body(self, limit=8192):
                 n = int(self.headers.get("Content-Length") or 0)
-                if n < 0 or n > 8192:
+                if n < 0 or n > limit:
                     return None
                 try:
                     return json.loads(self.rfile.read(n) or b"{}")
@@ -7853,6 +7916,16 @@ class TvServer:
                     t = self.headers.get("X-Kino-Token") or (q.get("t") or [""])[0]
                     if not api._tv_token_ok(t):
                         return self._json(401, {"ok": False, "error": "unauthorized"})
+                    if p == "/api/tv/state" and method == "GET":
+                        return self._json(200, srv.tv.state((q.get("w") or [""])[0] == "1"))
+                    if p in ("/api/tv/report", "/api/tv/cmd") and method == "POST":
+                        d = self._body(65536)
+                        if not isinstance(d, dict):
+                            return self._json(400, {"ok": False, "error": "bad request"})
+                        if p == "/api/tv/cmd":
+                            srv.tv.cmd(d)
+                            return self._json(200, {"ok": True})
+                        return self._json(200, srv.tv.report(hashlib.sha256(t.encode()).hexdigest()[:16], d))
                     if method == "GET":
                         if p == "/api/library":
                             return self._json(200, self._library())
