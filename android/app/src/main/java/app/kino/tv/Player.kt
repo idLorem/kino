@@ -71,6 +71,7 @@ import org.json.JSONObject
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.interfaces.IMedia
 import org.videolan.libvlc.util.VLCVideoLayout
 import java.util.Locale
 
@@ -361,7 +362,7 @@ fun PlayerScreen(
         textList = emptyList()
         val m = Media(vlc, Uri.parse(conn.streamUrl(item.id, file.fid)))
         m.setHWDecoderEnabled(hw, false)
-        m.addOption(":network-caching=3000")
+        m.addOption(":network-caching=6000")
         if (startPos > 0) m.addOption(":start-time=" + (startPos / 1000.0))
         mp.setMedia(m)
         m.release()
@@ -421,6 +422,24 @@ fun PlayerScreen(
 
     LaunchedEffect(started, rate) {
         if (started) mp.setRate(rate)
+    }
+
+    LaunchedEffect(audioSel, tracksTick, started) {
+        if (started) {
+            var ch = 2
+            try {
+                val m = mp.getMedia()
+                if (m != null) {
+                    try {
+                        for (i in 0 until m.trackCount) {
+                            val t = m.getTrack(i)
+                            if (t is IMedia.AudioTrack && (t.id == audioSel || audioSel < 0)) { ch = t.channels; break }
+                        }
+                    } finally { m.release() }
+                }
+            } catch (_: Exception) { }
+            mp.setVolume(if (ch > 2) 150 else 100)
+        }
     }
 
     LaunchedEffect(started, delayMs) {
