@@ -274,6 +274,8 @@ fun HomeScreen(
     onOpen: (Item) -> Unit,
     onRefresh: () -> Unit,
     onSettings: () -> Unit,
+    pcActive: Boolean,
+    onPcRemote: () -> Unit,
     update: Rel?,
     updProgress: Int,
     updReady: Boolean,
@@ -339,6 +341,7 @@ fun HomeScreen(
                         hPad = 16.dp,
                     )
                 }
+                if (pcActive) Pill(tr("Пульт ПК", "PC remote"), selected = true, onClick = onPcRemote, hPad = 16.dp)
                 Pill(tr("Обновить", "Refresh"), onClick = onRefresh, hPad = 16.dp)
                 Pill(tr("Настройки", "Settings"), onClick = onSettings, hPad = 16.dp)
             }
@@ -395,6 +398,7 @@ fun DetailScreen(
     item: Item,
     onBack: () -> Unit,
     onPlay: (Item, PlayFile) -> Unit,
+    onPlayPc: (Item, PlayFile) -> Unit,
     onChanged: () -> Unit,
 ) {
     BackHandler { onBack() }
@@ -453,6 +457,10 @@ fun DetailScreen(
                         modifier = Modifier.width(bw),
                     )
                 }
+            }
+            if (cur.files.isNotEmpty()) {
+                val pcf = cur.files.firstOrNull { cur.resumeFid >= 0 && it.fid == cur.resumeFid } ?: cur.files.firstOrNull { !it.watched } ?: cur.files[0]
+                Pill(tr("Играть на ПК", "Play on PC"), onClick = { onPlayPc(cur, pcf) }, modifier = Modifier.width(bw * 2 + 12.dp))
             }
             if (cur.resumeFid >= 0 && !ghost) {
                 Pill(

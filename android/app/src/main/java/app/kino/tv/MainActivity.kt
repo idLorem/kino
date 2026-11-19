@@ -17,6 +17,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -82,6 +84,9 @@ fun KinoApp() {
     var selectedId by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf<Pair<Item, PlayFile>?>(null) }
     var settings by remember { mutableStateOf(false) }
+    var pcRemote by remember { mutableStateOf(false) }
+    var pcActive by remember { mutableStateOf(false) }
+    var hdmiPick by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
     var update by remember { mutableStateOf<Rel?>(null) }
     var updStatus by remember { mutableStateOf("") }
     var updProgress by remember { mutableStateOf(-1) }
@@ -167,6 +172,43 @@ fun KinoApp() {
 
     LaunchedEffect(conn) { if (conn != null) load(false) }
 
+    LaunchedEffect(conn, playing, pcRemote) {
+        val cc = conn
+        while (cc != null && playing == null && !pcRemote) {
+            pcActive = Pc.state(cc)?.optBoolean("active") == true
+            delay(5000)
+        }
+    }
+
+    fun hdmiGo() {
+        val list = Hdmi.inputs(ctx)
+        val hit = list.firstOrNull { it.first == Prefs.str(ctx, "hdmi", "") }
+        when {
+            hit != null -> Hdmi.go(ctx, hit.first)
+            list.size == 1 -> { Prefs.setStr(ctx, "hdmi", list[0].first); Hdmi.go(ctx, list[0].first) }
+            list.size > 1 -> hdmiPick = list
+        }
+    }
+
+    fun hdmiChoose() {
+        val list = Hdmi.inputs(ctx)
+        if (list.size > 1) hdmiPick = list else hdmiGo()
+    }
+
+    fun playOnPc(it: Item, f: PlayFile) {
+        val cc = conn ?: return
+        scope.launch {
+            val pos = if (Prefs.str(ctx, "resume", "1") == "1") f.pos else 0L
+            val err = Pc.play(cc, it.id, f.fid, pos)
+            if (err != null) {
+                android.widget.Toast.makeText(ctx, Pc.errText(err), android.widget.Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            pcRemote = true
+            if (Prefs.isTv(ctx)) hdmiGo()
+        }
+    }
+
     val c = conn
     if (c == null) {
         ConnectScreen { conn = it }
@@ -197,6 +239,26 @@ fun KinoApp() {
         return
     }
 
+    if (pcRemote) {
+        androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+            PcRemoteScreen(
+                conn = c,
+                onBack = { pcRemote = false },
+                onHdmi = if (Prefs.isTv(ctx)) { { hdmiChoose() } } else null,
+                onRefresh = { pcRemote = false; load(false) },
+            )
+            hdmiPick?.let { list ->
+                DialogBox(tr("Вход HDMI", "HDMI input"), { hdmiPick = null }) {
+                    OptionList(
+                        list.map { i -> Opt(i.second, i.first == Prefs.str(ctx, "hdmi", "")) { Prefs.setStr(ctx, "hdmi", i.first); Hdmi.go(ctx, i.first) } },
+                        onPicked = { hdmiPick = null },
+                    )
+                }
+            }
+        }
+        return
+    }
+
     if (settings) {
         SettingsScreen(
             c,
@@ -219,7 +281,7 @@ fun KinoApp() {
 
     val sel = (library + ghosts).firstOrNull { it.id == selectedId }
     if (sel != null) {
-        DetailScreen(c, sel, onBack = { selectedId = null }, onPlay = { it, f -> playing = it to f }, onChanged = { load(false) })
+        DetailScreen(c, sel, onBack = { selectedId = null }, onPlay = { it, f -> playing = it to f }, onPlayPc = { it, f -> playOnPc(it, f) }, onChanged = { load(false) })
         return
     }
 
@@ -234,6 +296,8 @@ fun KinoApp() {
         onOpen = { lastFocus = it.id; selectedId = it.id },
         onRefresh = { load(true) },
         onSettings = { settings = true },
+        pcActive = pcActive,
+        onPcRemote = { pcRemote = true },
         update = update,
         updProgress = updProgress,
         updReady = updFile != null,

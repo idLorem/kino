@@ -19,6 +19,7 @@ A catalog for local movies and series on Windows, with an Android TV and phone c
 - English and Russian interface with matching metadata (OMDb and IMDb for English, Kinopoisk for Russian)
 - Access another PC's library over LAN or remotely via the built-in AmneziaWG VPN
 - Android TV and phone app with audio and subtitle selection and playback resume
+- "Play on PC" from the TV or phone app: the movie starts in mpv on the PC (HDMI to the TV) and the phone works as a remote
 
 ### Install
 
@@ -55,6 +56,7 @@ Settings → Letterboxd → enter your username (the watchlist must be public).
 - Русский и английский интерфейс с метаданными на выбранном языке (Кинопоиск для русского, OMDb и IMDb для английского)
 - Доступ к библиотеке другого ПК по локальной сети или через встроенный AmneziaWG VPN
 - Приложение для Android TV и телефона с выбором аудио и субтитров и продолжением просмотра
+- «Играть на ПК» из приложения на ТВ или телефоне: фильм запускается в mpv на компьютере (HDMI к ТВ), телефон работает как пульт
 
 ### Установка
 

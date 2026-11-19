@@ -27,3 +27,7 @@ progress.json
 
 vpn.conf
 vpn/kino-vpn.exe
+
+mpv/
+mpv-dl/
+*.bak
