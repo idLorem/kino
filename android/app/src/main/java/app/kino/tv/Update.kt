@@ -95,6 +95,10 @@ object Updater {
                     }
                 }
             }
+            if (total > 0 && done != total) {
+                part.delete()
+                throw java.io.IOException("incomplete")
+            }
         } finally {
             c.disconnect()
         }

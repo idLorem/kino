@@ -121,7 +121,7 @@ private fun JSONObject.tracks(key: String): List<Triple<Int, String, Boolean>> {
 }
 
 @Composable
-fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefresh: () -> Unit, tv: Boolean = false) {
+fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefresh: () -> Unit, tv: Boolean = false, library: List<Item> = emptyList()) {
     BackHandler { onBack() }
     val scope = rememberCoroutineScope()
     var st by remember { mutableStateOf<JSONObject?>(null) }
@@ -209,7 +209,10 @@ fun PcRemoteScreen(conn: Conn, onBack: () -> Unit, onHdmi: (() -> Unit)?, onRefr
                 Text(if (wasActive) if (tv) tr("Воспроизведение на ТВ закончилось", "Playback on the TV has ended") else tr("Воспроизведение на ПК закончилось", "Playback on the PC has ended") else tr("На ПК ничего не играет", "Nothing is playing on the PC"), color = C.muted, fontSize = 18.sp)
                 if (wasActive) Pill(tr("Обновить список", "Refresh list"), onClick = { onRefresh() }, hPad = 16.dp)
             } else {
-                if (cp && pid.isNotEmpty()) {
+                val pItem = library.firstOrNull { it.id == pid }
+                if (cp && pItem != null) {
+                    PosterImage(pItem, conn, Modifier.fillMaxWidth().aspectRatio(1f).clip(androidx.compose.foundation.shape.RoundedCornerShape(20.dp)))
+                } else if (cp && pid.isNotEmpty()) {
                     coil.compose.AsyncImage(
                         model = conn.posterUrl(pid),
                         contentDescription = null,

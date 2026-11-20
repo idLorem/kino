@@ -250,6 +250,7 @@ fun KinoApp() {
                 onHdmi = if (Prefs.isTv(ctx) && !remoteTv) { { hdmiChoose() } } else null,
                 onRefresh = { pcRemote = false; remoteTv = false; load(false) },
                 tv = remoteTv,
+                library = library,
             )
             hdmiPick?.let { list ->
                 DialogBox(tr("Вход HDMI", "HDMI input"), { hdmiPick = null }) {

@@ -451,7 +451,7 @@ fun PlayerScreen(
                     when (c.optString("op")) {
                         "seek" -> seekRel(c.optLong("ms"))
                         "seekto" -> seekTo(c.optLong("ms"))
-                        "pause" -> if (c.optBoolean("v") == mp.isPlaying()) { if (c.optBoolean("v")) mp.pause() else mp.play() }
+                        "pause" -> if (c.optBoolean("v") == mp.isPlaying()) { if (c.optBoolean("v")) mp.pause() else mp.play(); playing = !c.optBoolean("v") }
                         "vol" -> { gain = c.optInt("v", gain).coerceIn(0, 200); Prefs.setStr(ctx, "gain", gain.toString()) }
                         "aid" -> { mp.setAudioTrack(c.optInt("id")); audioSel = c.optInt("id"); saveAudio(audioSel) }
                         "sid" -> {
@@ -464,7 +464,7 @@ fun PlayerScreen(
                     }
                 }
             }
-            delay(if (watch) 250 else 2000)
+            delay(if (watch) 50 else 2000)
         }
     }
 

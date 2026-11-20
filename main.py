@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.0.21"
+APP_VERSION = "1.5"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -1177,7 +1177,10 @@ class Api:
     def _tv_add_token(self, name):
         tok = secrets.token_urlsafe(24)
         with self._lock:
-            self._cfg["srv_tokens"][tok] = {"name": name, "ts": int(time.time())}
+            toks = self._cfg["srv_tokens"]
+            toks[tok] = {"name": name, "ts": int(time.time())}
+            for k in sorted(toks, key=lambda k: (toks[k] or {}).get("ts", 0) if isinstance(toks[k], dict) else 0)[:-20]:
+                del toks[k]
         self._save_cfg()
         return tok
 
@@ -7437,7 +7440,7 @@ class TvRelay:
     TTL = 6
 
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = threading.Condition()
         self.devs = {}
         self.watch = 0
 
@@ -7450,22 +7453,30 @@ class TvRelay:
             if not live:
                 return {"ok": True, "active": False}
             k = max(live)[1]
-            return dict(self.devs[k]["st"], ok=True, dev=k)
+            v = self.devs[k]
+            out = dict(v["st"], ok=True, dev=k)
+            if not out.get("pause") and isinstance(out.get("pos"), (int, float)):
+                p = out["pos"] + int((now - v["ts"]) * 1000)
+                out["pos"] = min(p, out["dur"]) if isinstance(out.get("dur"), (int, float)) and out["dur"] > 0 else p
+            return out
 
     def cmd(self, d):
         with self.lock:
             v = self.devs.get(str(d.get("dev") or ""))
             if v and time.time() - v["ts"] < self.TTL:
                 v["q"] = (v["q"] + [d])[-20:]
+                self.lock.notify_all()
 
-    def report(self, dev, d):
+    def report(self, dev, d, hold=0):
         now = time.time()
         with self.lock:
             self.devs = {k: v for k, v in self.devs.items() if now - v["ts"] < 60}
             v = self.devs.setdefault(dev, {"q": []})
             v["st"], v["ts"] = d, now
+            if hold and now - self.watch < 3:
+                self.lock.wait_for(lambda: v["q"], hold)
             q, v["q"] = v["q"], []
-            return {"ok": True, "cmds": q, "watch": now - self.watch < 3}
+            return {"ok": True, "cmds": q, "watch": time.time() - self.watch < 3}
 
 
 class PcPlayer:
@@ -7859,7 +7870,6 @@ class TvServer:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(length))
-                self.send_header("Access-Control-Allow-Origin", "*")
                 for k, v in (extra or {}).items():
                     self.send_header(k, v)
                 self.end_headers()
@@ -7878,14 +7888,6 @@ class TvServer:
                     return json.loads(self.rfile.read(n) or b"{}")
                 except ValueError:
                     return None
-
-            def do_OPTIONS(self):
-                self.send_response(204)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Headers", "X-Kino-Token, Content-Type, Range")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
 
             def do_HEAD(self):
                 self._route("GET")
@@ -7925,7 +7927,7 @@ class TvServer:
                         if p == "/api/tv/cmd":
                             srv.tv.cmd(d)
                             return self._json(200, {"ok": True})
-                        return self._json(200, srv.tv.report(hashlib.sha256(t.encode()).hexdigest()[:16], d))
+                        return self._json(200, srv.tv.report(hashlib.sha256(t.encode()).hexdigest()[:16], d, 1.0))
                     if method == "GET":
                         if p == "/api/library":
                             return self._json(200, self._library())
@@ -7990,12 +7992,11 @@ class TvServer:
                 f = [x for x in srv.fails.get(ip, []) if now - x < 600]
                 if len(f) >= 5:
                     return self._json(429, {"ok": False, "error": "too many attempts"})
+                f.append(now)
+                srv.fails[ip] = f
                 d = self._body() or {}
                 if api._cfg.get("srv_nopin") != "1" and not hmac.compare_digest(str(d.get("pin") or ""), api._srv_pin()):
-                    f.append(now)
-                    srv.fails[ip] = f
                     return self._json(403, {"ok": False, "error": "wrong pin"})
-                srv.fails.pop(ip, None)
                 token = api._tv_add_token(str(d.get("device") or "TV")[:40])
                 self._json(200, {"ok": True, "token": token, "name": socket.gethostname()})
 
