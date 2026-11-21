@@ -1,5 +1,7 @@
 # Kino
 
+[![Release](https://img.shields.io/github/v/release/idLorem/kino)](../../releases/latest) [![License](https://img.shields.io/github/license/idLorem/kino)](LICENSE) [![Downloads](https://img.shields.io/github/downloads/idLorem/kino/total)](../../releases)
+
 [English](#english) · [Русский](#русский)
 
 **[Website](https://idlorem.github.io/kino/) · [Сайт](https://idlorem.github.io/kino/ru.html)**
@@ -32,7 +34,11 @@ A catalog for local movies and series on Windows, with an Android TV and phone c
 2. Pick your media folder and language on first launch.
 3. Optional: add [OMDb](https://www.omdbapi.com/apikey.aspx) (English) or [Kinopoisk Unofficial](https://kinopoiskapiunofficial.tech) (Russian) API keys in settings for faster, more accurate matching. IMDb ratings work without keys.
 
+Requires Windows 10 or 11. The installer is not code-signed, so Windows SmartScreen may warn: click More info → Run anyway. To verify a download, compare `Get-FileHash <file>` with `SHA256SUMS` from the release.
+
 ### Android TV and phone
+
+Requires Android 6.0 or newer.
 
 1. Enable the server in Settings → TV access (the PIN is optional).
 2. Install `kino.apk` from [Releases](../../releases/latest), select your PC (or enter its IP) and type the PIN.
@@ -47,6 +53,17 @@ Allow Kino through Windows Firewall on private networks if prompted. Unsupported
 ### Letterboxd
 
 Settings → Letterboxd → enter your username (the watchlist must be public).
+
+### Troubleshooting
+
+- **The phone or TV can't find the PC:** both must be on the same network, the server must be on in Settings → TV access, and Windows Firewall must allow Kino on private networks. Try entering the PC's IP manually.
+- **No sound or a movie is skipped:** unsupported audio (like DTS) is converted or skipped. Pick another audio track in the player.
+- **Wrong poster or match:** right-click the item and fix the match or swap the poster.
+- **Something else:** open an [issue](../../issues/new/choose).
+
+### Credits
+
+This product uses the TMDB API but is not endorsed or certified by TMDB. IMDb, Kinopoisk and Letterboxd data belongs to their owners. See [NOTICE.md](NOTICE.md) for third-party components.
 
 ## Русский
 
@@ -74,7 +91,11 @@ Settings → Letterboxd → enter your username (the watchlist must be public).
 2. При первом запуске выберите папку с медиа и язык.
 3. Необязательно: добавьте в настройках ключи API [Кинопоиск Unofficial](https://kinopoiskapiunofficial.tech) (русский) или [OMDb](https://www.omdbapi.com/apikey.aspx) (английский) для более точного поиска. Рейтинги IMDb работают без ключей.
 
+Нужен Windows 10 или 11. Установщик не подписан, поэтому SmartScreen может предупредить: «Подробнее» → «Выполнить в любом случае». Чтобы проверить загрузку, сравните `Get-FileHash <файл>` с `SHA256SUMS` из релиза.
+
 ### Android TV и телефон
+
+Нужен Android 6.0 или новее.
 
 1. Включите сервер в «Настройки» → «Доступ с телевизора» (PIN по желанию).
 2. Установите `kino.apk` из [Releases](../../releases/latest), выберите ПК (или введите IP) и укажите PIN.
@@ -89,3 +110,14 @@ Settings → Letterboxd → enter your username (the watchlist must be public).
 ### Letterboxd
 
 «Настройки» → Letterboxd → укажите ник (список должен быть публичным).
+
+### Частые проблемы
+
+- **Телефон или ТВ не находят ПК:** устройства должны быть в одной сети, сервер включён в «Настройки» → «Доступ с телевизора», брандмауэр Windows разрешает Kino в частной сети. Попробуйте ввести IP компьютера вручную.
+- **Нет звука или фильм пропускается:** неподдерживаемый звук (например, DTS) конвертируется или пропускается. Выберите другую аудиодорожку в плеере.
+- **Неверный постер или совпадение:** правый клик по карточке, исправьте совпадение или смените постер.
+- **Другое:** создайте [issue](../../issues/new/choose).
+
+### Благодарности
+
+Продукт использует API TMDB, но не одобрен и не сертифицирован TMDB. Данные IMDb, Кинопоиск и Letterboxd принадлежат их владельцам. Сторонние компоненты: [NOTICE.md](NOTICE.md).

@@ -1,0 +1,28 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Kino version
+      placeholder: "1.5.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options: [Windows app, Android TV, Android phone, Remote control]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what you expected
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Windows or Android version
