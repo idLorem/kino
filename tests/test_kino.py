@@ -189,6 +189,14 @@ class LongPoll(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(r.state()["pos"], 1000)
 
+    def test_playing_device_wins_over_paused(self):
+        r = main.TvRelay()
+        for _ in range(4):
+            r.report("a", {"active": True, "pos": 5000, "dur": 9000, "pause": True})
+            self.assertEqual(r.state()["dev"], "a") if _ == 0 else None
+            r.report("b", {"active": True, "pos": 1000, "dur": 9000})
+            self.assertEqual(r.state()["dev"], "b")
+
     def test_no_hold_when_not_watched(self):
         r = main.TvRelay()
         t = time.time()

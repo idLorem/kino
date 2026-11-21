@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.5"
+APP_VERSION = "1.5.1"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -7443,6 +7443,7 @@ class TvRelay:
         self.lock = threading.Condition()
         self.devs = {}
         self.watch = 0
+        self.cur = ""
 
     def state(self, watch=False):
         now = time.time()
@@ -7452,7 +7453,8 @@ class TvRelay:
             live = [(v["ts"], k) for k, v in self.devs.items() if now - v["ts"] < self.TTL and v["st"].get("active")]
             if not live:
                 return {"ok": True, "active": False}
-            k = max(live)[1]
+            k = max(live, key=lambda x: (not self.devs[x[1]]["st"].get("pause"), x[1] == self.cur, x[0]))[1]
+            self.cur = k
             v = self.devs[k]
             out = dict(v["st"], ok=True, dev=k)
             if not out.get("pause") and isinstance(out.get("pos"), (int, float)):
