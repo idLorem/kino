@@ -45,13 +45,19 @@ object Marks {
         save()
     }
 
+    private fun mk(id: String, pf: PlayFile) = if (pf.key.isNotEmpty()) "$id|${pf.key}" else "$id|${pf.fid}"
+
+    private fun entry(f: JSONObject, id: String, pf: PlayFile): JSONObject? =
+        f.optJSONObject(mk(id, pf)) ?: if (pf.key.isNotEmpty()) f.optJSONObject("$id|${pf.fid}") else null
+
     @Synchronized
-    fun progress(item: Item, fid: Int, pos: Long, dur: Long) {
+    fun progress(item: Item, file: PlayFile, pos: Long, dur: Long) {
         if (dur <= 0) return
         val done = pos >= dur * 0.9
         val f = sect("f")
-        f.put("${item.id}|$fid", JSONObject().put("pos", if (done) 0 else pos).put("dur", dur).put("ts", System.currentTimeMillis() / 1000.0).put("done", done))
-        if (done && item.files.all { it.fid == fid || f.optJSONObject("${item.id}|${it.fid}")?.optBoolean("done") == true }) {
+        if (file.key.isNotEmpty()) f.remove("${item.id}|${file.fid}")
+        f.put(mk(item.id, file), JSONObject().put("pos", if (done) 0 else pos).put("dur", dur).put("ts", System.currentTimeMillis() / 1000.0).put("done", done))
+        if (done && item.files.all { it.fid == file.fid || entry(f, item.id, it)?.optBoolean("done") == true }) {
             sect("w").put(item.id, true)
         }
         save()
@@ -62,7 +68,7 @@ object Marks {
         val w = sect("w"); val h = sect("h"); val p = sect("p"); val f = sect("f")
         var rf = -1; var rp = 0L; var rd = 0L; var rt = 0.0
         val files = it.files.map { pf ->
-            val e = f.optJSONObject("${it.id}|${pf.fid}")
+            val e = entry(f, it.id, pf)
             if (e == null) pf.copy(watched = false, pos = 0, dur = 0) else {
                 val done = e.optBoolean("done")
                 val pos = e.optLong("pos")

@@ -161,6 +161,31 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post("/api/pair", {"pin": "123456"}).status, 429)
 
 
+class UpdateHash(unittest.TestCase):
+    def api(self, sums):
+        a = main.Api.__new__(main.Api)
+        a._download_release_asset = lambda url, limit: sums.encode()
+        return a
+
+    def test_sha_mismatch_rejected_and_star_accepted(self):
+        import hashlib
+        data = b"print(1)"
+        h = hashlib.sha256(data).hexdigest()
+        self.api("%s *main.py" % h)._verify_sha({"SHA256SUMS": "u"}, "main.py", data)
+        self.api("%s  main.py" % h)._verify_sha({"SHA256SUMS": "u"}, "main.py", data)
+        with self.assertRaises(main.ApiError):
+            self.api("%s  main.py" % ("0" * 64))._verify_sha({"SHA256SUMS": "u"}, "main.py", data)
+        with self.assertRaises(main.ApiError):
+            self.api("%s  other.py" % h)._verify_sha({"SHA256SUMS": "u"}, "main.py", data)
+
+
+class WebPage(unittest.TestCase):
+    def test_titles_escaped(self):
+        self.assertIn("${H(i.title)}", main.TV_WEB)
+        self.assertIn("${H(f.name)}", main.TV_WEB)
+        self.assertNotIn("${i.title}", main.TV_WEB)
+
+
 class Tokens(unittest.TestCase):
     def test_kept_to_twenty_newest(self):
         a = main.Api.__new__(main.Api)

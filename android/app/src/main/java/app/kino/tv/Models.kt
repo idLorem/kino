@@ -22,6 +22,7 @@ data class PlayFile(
     val pos: Long = 0,
     val dur: Long = 0,
     val subs: List<SubFile> = emptyList(),
+    val key: String = "",
 )
 
 data class Item(
@@ -108,7 +109,7 @@ private fun playFiles(o: JSONObject): List<PlayFile> {
     if (files != null) {
         for (i in 0 until files.length()) {
             val f = files.getJSONObject(i)
-            out.add(PlayFile(f.optInt("fid"), f.str("name"), f.optLong("size"), f.optBoolean("watched"), f.optLong("pos"), f.optLong("dur"), subsOf(f)))
+            out.add(PlayFile(f.optInt("fid"), f.str("name"), f.optLong("size"), f.optBoolean("watched"), f.optLong("pos"), f.optLong("dur"), subsOf(f), f.str("key")))
         }
     }
     val seasons = o.optJSONArray("seasons")
@@ -123,7 +124,7 @@ private fun playFiles(o: JSONObject): List<PlayFile> {
                 val tag = if (en != null) String.format("S%02dE%02d", sn, en) else String.format("S%02d", sn)
                 val raw = e.str("name")
                 val nice = if (en != null && raw.substringAfterLast('.', "").lowercase() in setOf("mkv", "mp4", "avi", "mov", "m4v", "ts", "webm", "wmv")) tr("Серия ", "Episode ") + en else raw
-                out.add(PlayFile(e.optInt("fid"), tag + "  " + nice, e.optLong("size"), e.optBoolean("watched"), e.optLong("pos"), e.optLong("dur"), subsOf(e)))
+                out.add(PlayFile(e.optInt("fid"), tag + "  " + nice, e.optLong("size"), e.optBoolean("watched"), e.optLong("pos"), e.optLong("dur"), subsOf(e), e.str("key")))
             }
         }
     }

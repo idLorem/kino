@@ -33,7 +33,7 @@ webview = None
 
 APP_NAME = "Kino"
 WINDOW_TITLE = "Kino"
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 MATCH_V = 2
 UPDATE_REPO = "idLorem/kino"
 
@@ -1329,17 +1329,6 @@ class Api:
                 self.set_watched(item_id, True)
         return {"ok": True, "done": done}
 
-    def tv_progress_clear(self, item_id):
-        self._progress_all()
-        it = self._items.get(item_id)
-        pre = "%s|" % item_id
-        gone = set(_flat_paths(self._view(it))) if it else set()
-        with self._lock:
-            for k in [k for k in self._prog if k.startswith(pre) or k in gone]:
-                del self._prog[k]
-        self._save_prog()
-        return {"ok": True}
-
     def _save_prog(self):
         with self._lock:
             if getattr(self, "_prog_timer", None):
@@ -1522,12 +1511,6 @@ class Api:
             m = self._cfg["rmarks"].setdefault(rk, {})
             m.setdefault(kind, {})[key] = val
         self._save_cfg()
-
-    def _rem_post(self, path, body):
-        try:
-            return self._rem_http("POST", path, body).json()
-        except ApiError as e:
-            return {"ok": False, "error": self._rem_err(e)}
 
     @staticmethod
     def _rem_err(e):
@@ -7202,16 +7185,17 @@ button,input{font:inherit;padding:9px 14px;border-radius:10px;border:1px solid #
 <div id="m" style="display:none"><header>Kino</header><div id="g"></div></div><div id="p"></div>
 <script>
 let T=localStorage.kt||"",D=[];
+const H=s=>String(s??"").replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";");
 fetch("/api/ping").then(r=>r.json()).then(j=>{if(j.pin===false&&!T)pair()});
 const q=(u,o)=>fetch(u,Object.assign({headers:{"X-Kino-Token":T}},o)).then(r=>r.json());
 async function pair(){const r=await fetch("/api/pair",{method:"POST",body:JSON.stringify({pin:pin.value,device:"Browser"})});const j=await r.json();
 if(j.token){T=j.token;localStorage.kt=T;go()}else e.textContent=j.error||"Wrong PIN"}
 async function go(){const j=await q("/api/library");if(!j.ok){localStorage.kt="";T="";return}
 l.style.display="none";m.style.display="block";D=j.items.filter(i=>!i.hidden);
-g.innerHTML=D.map((i,k)=>`<div class="c" onclick="op(${k})"><img src="${i.localPoster?"/api/poster/"+i.id+"?t="+T:(i.meta&&i.meta.poster)||""}"><b>${i.title}</b></div>`).join("")}
+g.innerHTML=D.map((i,k)=>`<div class="c" onclick="op(${k})"><img src="${H(i.localPoster?"/api/poster/"+i.id+"?t="+T:(i.meta&&i.meta.poster)||"")}"><b>${H(i.title)}</b></div>`).join("")}
 function op(k){const i=D[k];const fs=i.files.concat(...i.seasons.map(s=>s.episodes));
-p.style.display="block";p.innerHTML=`<button onclick="p.style.display='none';p.innerHTML=''">Close</button><h3>${i.title}</h3><video id="v" controls autoplay></video>`+
-fs.map(f=>`<button class="f" onclick="v.src='/api/stream/${i.id}/${f.fid}?t=${T}';v.play()">${f.name}</button>`).join("")}
+p.style.display="block";p.innerHTML=`<button onclick="p.style.display='none';p.innerHTML=''">Close</button><h3>${H(i.title)}</h3><video id="v" controls autoplay></video>`+
+fs.map(f=>`<button class="f" onclick="v.src='/api/stream/${H(i.id)}/${f.fid}?t=${H(T)}';v.play()">${H(f.name)}</button>`).join("")}
 if(T)go();
 </script></body></html>'''
 
@@ -7291,6 +7275,7 @@ def _tv_public(view):
     def strip(f):
         g = {k: x for k, x in f.items() if k != "path"}
         g["fid"] = n[0]
+        g["key"] = hashlib.md5(os.path.normcase(f["path"]).encode("utf-8")).hexdigest()[:12]
         n[0] += 1
         subs = _find_subs(f["path"])
         if subs:
@@ -7933,8 +7918,6 @@ class TvServer:
                     if method == "GET":
                         if p == "/api/library":
                             return self._json(200, self._library())
-                        if p == "/api/watchlist":
-                            return self._json(200, api.wl_list())
                         if p == "/api/pc/state":
                             return self._json(200, api._pc().state())
                         if p == "/api/pc/outputs":
@@ -7955,17 +7938,6 @@ class TvServer:
                         d = self._body()
                         if d is None:
                             return self._json(400, {"ok": False, "error": "bad request"})
-                        flag = bool(d.get("flag"))
-                        if p == "/api/watched":
-                            return self._json(200, api.set_watched(str(d.get("id") or ""), flag))
-                        if p == "/api/pin":
-                            return self._json(200, api.set_pin(str(d.get("ref") or ""), flag))
-                        if p == "/api/hidden":
-                            return self._json(200, api.set_hidden(str(d.get("id") or ""), flag))
-                        if p == "/api/progress":
-                            return self._json(200, api.tv_progress(str(d.get("id") or ""), d.get("fid"), d.get("pos"), d.get("dur")))
-                        if p == "/api/progress/clear":
-                            return self._json(200, api.tv_progress_clear(str(d.get("id") or "")))
                         if p == "/api/pc/play":
                             return self._json(200, api._pc().play(str(d.get("id") or ""), d.get("fid"), d.get("pos")))
                         if p == "/api/pc/cmd":

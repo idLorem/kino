@@ -289,7 +289,7 @@ fun PlayerScreen(
     }
 
     fun reportProgress(p: Long, d: Long) {
-        Marks.progress(item, file.fid, p, d)
+        Marks.progress(item, file, p, d)
     }
 
     fun leave() {

@@ -75,6 +75,7 @@ object Updater {
             c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "kino-android")
             val total = c.contentLengthLong
+            if (total <= 0) throw java.io.IOException("no length")
             var done = 0L
             var last = -1
             c.inputStream.use { input ->
@@ -95,14 +96,14 @@ object Updater {
                     }
                 }
             }
-            if (total > 0 && done != total) {
+            if (done != total) {
                 part.delete()
                 throw java.io.IOException("incomplete")
             }
         } finally {
             c.disconnect()
         }
-        part.renameTo(out)
+        if (!part.renameTo(out)) throw java.io.IOException("rename")
         out
     }
 
